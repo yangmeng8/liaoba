@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../shared/app_colors.dart';
+import 'security/account_security_page.dart';
 
 class GeneralSettingsPage extends StatelessWidget {
   const GeneralSettingsPage({super.key});
@@ -37,7 +38,18 @@ class GeneralSettingsPage extends StatelessWidget {
           child: ListView(
             padding: EdgeInsets.zero,
             children: [
-              _SettingGroup(children: [_SettingRow(title: '账户安全')]),
+              _SettingGroup(
+                children: [
+                  _SettingRow(
+                    title: '账户安全',
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const AccountSecurityPage(),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
               const _SectionLabel('其他设置'),
               _SettingGroup(
                 children: [
@@ -116,26 +128,30 @@ class _SectionLabel extends StatelessWidget {
 class _SettingRow extends StatelessWidget {
   final String title;
   final String? trailing;
-  const _SettingRow({required this.title, this.trailing});
+  final VoidCallback? onTap;
+  const _SettingRow({required this.title, this.trailing, this.onTap});
 
   @override
-  Widget build(BuildContext context) => Container(
-    height: 60,
-    padding: const EdgeInsets.symmetric(horizontal: 20),
-    decoration: const BoxDecoration(
-      border: Border(bottom: BorderSide(color: Color(0xFFE9E9E9))),
-    ),
-    child: Row(
-      children: [
-        Expanded(child: Text(title, style: const TextStyle(fontSize: 21))),
-        if (trailing != null)
-          Text(
-            trailing!,
-            style: const TextStyle(fontSize: 17, color: AppColors.muted),
-          ),
-        const SizedBox(width: 10),
-        const Icon(Icons.chevron_right, size: 28, color: Color(0xFF9EA3AA)),
-      ],
+  Widget build(BuildContext context) => InkWell(
+    onTap: onTap,
+    child: Container(
+      height: 60,
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: Color(0xFFE9E9E9))),
+      ),
+      child: Row(
+        children: [
+          Expanded(child: Text(title, style: const TextStyle(fontSize: 21))),
+          if (trailing != null)
+            Text(
+              trailing!,
+              style: const TextStyle(fontSize: 17, color: AppColors.muted),
+            ),
+          const SizedBox(width: 10),
+          const Icon(Icons.chevron_right, size: 28, color: Color(0xFF9EA3AA)),
+        ],
+      ),
     ),
   );
 }
