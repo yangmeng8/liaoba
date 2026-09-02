@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../../../shared/app_colors.dart';
+import '../../../../shared/app_colors.dart';
 
 /// 修改绑定手机号页面。
 class ChangeBoundPhonePage extends StatefulWidget {

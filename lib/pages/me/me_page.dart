@@ -1,8 +1,24 @@
 import 'package:flutter/material.dart';
-import '../general/general_settings_page.dart';
+import 'general/general_settings_page.dart';
+import 'general/appearanceSettings/appearance_settings_page.dart';
 
 class MePage extends StatelessWidget {
   const MePage({super.key});
+
+  static VoidCallback? _onItemTap(String title, BuildContext context) {
+    switch (title) {
+      case '外观设置':
+        return () => Navigator.of(context).push(
+              MaterialPageRoute(
+                  builder: (_) => const AppearanceSettingsPage()),
+            );
+      case '通用':
+        return () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const GeneralSettingsPage()),
+            );
+    }
+    return null;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -79,13 +95,7 @@ class MePage extends StatelessWidget {
                 padding: const EdgeInsets.only(top: 8),
                 itemCount: items.length,
                 itemBuilder: (context, i) => ListTile(
-                  onTap: items[i].$2 == '通用'
-                      ? () => Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => const GeneralSettingsPage(),
-                          ),
-                        )
-                      : null,
+                  onTap: _onItemTap(items[i].$2, context),
                   contentPadding: const EdgeInsets.symmetric(
                     horizontal: 20,
                     vertical: 0,

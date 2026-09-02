@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../../../shared/app_colors.dart';
+import '../../../../shared/app_colors.dart';
 import 'change_bound_phone_page.dart';
 import 'change_password_page.dart';
 
