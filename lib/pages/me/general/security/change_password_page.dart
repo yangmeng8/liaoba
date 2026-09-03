@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../../shared/app_colors.dart';
+import '../../../../shared/app_theme.dart';
 import 'reset_password_by_phone_page.dart';
 
 /// 修改密码页面。
@@ -53,13 +54,15 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-        backgroundColor: AppColors.pageBg,
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Scaffold(
+        backgroundColor: colors.bg,
         body: Column(
           children: [
             // 顶部导航栏
             Container(
-              color: AppColors.lime,
+              color: colors.surface,
               child: SafeArea(
                 bottom: false,
                 child: SizedBox(
@@ -72,13 +75,16 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
                         child: IconButton(
                           tooltip: '返回',
                           onPressed: () => Navigator.of(context).pop(),
-                          icon: const Icon(Icons.chevron_left, size: 34),
+                          icon: Icon(Icons.chevron_left,
+                              size: 34, color: colors.surfaceText),
                         ),
                       ),
-                      const Text(
+                      Text(
                         '修改密码',
                         style: TextStyle(
-                            fontSize: 20, fontWeight: FontWeight.w700),
+                            fontSize: 20,
+                            fontWeight: FontWeight.w700,
+                            color: colors.surfaceText),
                       ),
                     ],
                   ),
@@ -137,7 +143,7 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
                                 onPressed: _submit,
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: AppColors.lime,
-                                  foregroundColor: const Color(0xFF9EA0A4),
+                                  foregroundColor: Colors.black,
                                   elevation: 0,
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(26),
@@ -182,6 +188,7 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
           ],
         ),
       );
+  }
 }
 
 /// 带锁图标 + 密码可见切换的输入框。
@@ -199,26 +206,28 @@ class _PasswordField extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) => Container(
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Container(
         height: 56,
         padding: const EdgeInsets.symmetric(horizontal: 16),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: colors.card,
           borderRadius: BorderRadius.circular(12),
         ),
         child: Row(
           children: [
-            const Icon(Icons.lock_outline, color: AppColors.muted, size: 24),
+            Icon(Icons.lock_outline, color: colors.muted, size: 24),
             const SizedBox(width: 12),
             Expanded(
               child: TextField(
                 controller: controller,
                 obscureText: obscure,
-                style: const TextStyle(fontSize: 16),
+                style: TextStyle(fontSize: 16, color: colors.text),
                 decoration: InputDecoration(
                   hintText: hint,
                   hintStyle:
-                      const TextStyle(color: AppColors.muted, fontSize: 16),
+                      TextStyle(color: colors.muted, fontSize: 16),
                   border: InputBorder.none,
                 ),
               ),
@@ -227,11 +236,12 @@ class _PasswordField extends StatelessWidget {
               onTap: onToggleObscure,
               child: Icon(
                 obscure ? Icons.visibility_off : Icons.visibility,
-                color: AppColors.muted,
+                color: colors.muted,
                 size: 24,
               ),
             ),
           ],
         ),
       );
+  }
 }

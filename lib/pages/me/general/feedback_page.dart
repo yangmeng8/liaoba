@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../../shared/app_colors.dart';
+import '../../../shared/app_theme.dart';
 
 /// 意见反馈页面。
 class FeedbackPage extends StatefulWidget {
@@ -82,13 +83,15 @@ class _FeedbackPageState extends State<FeedbackPage> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-        backgroundColor: AppColors.pageBg,
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Scaffold(
+        backgroundColor: colors.bg,
         body: Column(
           children: [
             // 顶部导航栏
             Container(
-              color: AppColors.lime,
+              color: colors.surface,
               child: SafeArea(
                 bottom: false,
                 child: SizedBox(
@@ -101,13 +104,16 @@ class _FeedbackPageState extends State<FeedbackPage> {
                         child: IconButton(
                           tooltip: '返回',
                           onPressed: () => Navigator.of(context).pop(),
-                          icon: const Icon(Icons.chevron_left, size: 34),
+                          icon: Icon(Icons.chevron_left,
+                              size: 34, color: colors.surfaceText),
                         ),
                       ),
-                      const Text(
+                      Text(
                         '意见反馈',
                         style: TextStyle(
-                            fontSize: 20, fontWeight: FontWeight.w700),
+                            fontSize: 20,
+                            fontWeight: FontWeight.w700,
+                            color: colors.surfaceText),
                       ),
                     ],
                   ),
@@ -132,14 +138,15 @@ class _FeedbackPageState extends State<FeedbackPage> {
                           children: [
                             // 反馈内容标签
                             Row(
-                              children: const [
+                              children: [
                                 Text(
                                   '反馈内容',
                                   style: TextStyle(
                                       fontSize: 16,
-                                      fontWeight: FontWeight.w600),
+                                      fontWeight: FontWeight.w600,
+                                      color: colors.text),
                                 ),
-                                Text(
+                                const Text(
                                   '*',
                                   style: TextStyle(
                                       fontSize: 16,
@@ -156,7 +163,7 @@ class _FeedbackPageState extends State<FeedbackPage> {
                               ),
                               padding: const EdgeInsets.all(12),
                               decoration: BoxDecoration(
-                                color: Colors.white,
+                                color: colors.card,
                                 borderRadius: BorderRadius.circular(12),
                               ),
                               child: Stack(
@@ -165,11 +172,12 @@ class _FeedbackPageState extends State<FeedbackPage> {
                                     controller: _contentController,
                                     maxLength: _maxContentLength,
                                     maxLines: null,
-                                    style: const TextStyle(fontSize: 15),
-                                    decoration: const InputDecoration(
+                                    style: TextStyle(
+                                        fontSize: 15, color: colors.text),
+                                    decoration: InputDecoration(
                                       hintText: '您的反馈将帮助我们成长',
                                       hintStyle: TextStyle(
-                                          color: AppColors.muted,
+                                          color: colors.muted,
                                           fontSize: 15),
                                       border: InputBorder.none,
                                       counterText: '',
@@ -182,9 +190,9 @@ class _FeedbackPageState extends State<FeedbackPage> {
                                     bottom: 0,
                                     child: Text(
                                       '${_contentController.text.length}/$_maxContentLength',
-                                      style: const TextStyle(
+                                      style: TextStyle(
                                           fontSize: 13,
-                                          color: AppColors.muted),
+                                          color: colors.muted),
                                     ),
                                   ),
                                 ],
@@ -195,19 +203,19 @@ class _FeedbackPageState extends State<FeedbackPage> {
 
                             // 添加图片标签
                             RichText(
-                              text: const TextSpan(
+                              text: TextSpan(
                                 children: [
                                   TextSpan(
                                     text: '添加图片',
                                     style: TextStyle(
                                         fontSize: 16,
                                         fontWeight: FontWeight.w600,
-                                        color: Colors.black),
+                                        color: colors.text),
                                   ),
                                   TextSpan(
                                     text: '(最多添加3张)',
                                     style: TextStyle(
-                                        fontSize: 14, color: AppColors.muted),
+                                        fontSize: 14, color: colors.muted),
                                   ),
                                 ],
                               ),
@@ -219,7 +227,7 @@ class _FeedbackPageState extends State<FeedbackPage> {
                               width: double.infinity,
                               padding: const EdgeInsets.all(12),
                               decoration: BoxDecoration(
-                                color: Colors.white,
+                                color: colors.card,
                                 borderRadius: BorderRadius.circular(12),
                               ),
                               child: Wrap(
@@ -240,13 +248,13 @@ class _FeedbackPageState extends State<FeedbackPage> {
                                         width: 76,
                                         height: 76,
                                         decoration: BoxDecoration(
-                                          color: const Color(0xFFF5F5F5),
+                                          color: colors.divider,
                                           borderRadius:
                                               BorderRadius.circular(10),
                                         ),
-                                        child: const Icon(Icons.add,
+                                        child: Icon(Icons.add,
                                             size: 32,
-                                            color: Color(0xFFC9C9C9)),
+                                            color: colors.muted),
                                       ),
                                     ),
                                 ],
@@ -256,10 +264,12 @@ class _FeedbackPageState extends State<FeedbackPage> {
                             const SizedBox(height: 20),
 
                             // 联系方式标签
-                            const Text(
+                            Text(
                               '联系方式',
                               style: TextStyle(
-                                  fontSize: 16, fontWeight: FontWeight.w600),
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                  color: colors.text),
                             ),
                             const SizedBox(height: 8),
 
@@ -269,19 +279,20 @@ class _FeedbackPageState extends State<FeedbackPage> {
                               padding:
                                   const EdgeInsets.symmetric(horizontal: 12),
                               decoration: BoxDecoration(
-                                color: Colors.white,
+                                color: colors.card,
                                 borderRadius: BorderRadius.circular(12),
                               ),
                               child: TextField(
                                 controller: _contactController,
                                 keyboardType: TextInputType.phone,
                                 maxLength: 11,
-                                style: const TextStyle(fontSize: 15),
-                                decoration: const InputDecoration(
+                                style: TextStyle(
+                                    fontSize: 15, color: colors.text),
+                                decoration: InputDecoration(
                                   counterText: '',
                                   hintText: '请输入手机号码',
                                   hintStyle: TextStyle(
-                                      color: AppColors.muted, fontSize: 15),
+                                      color: colors.muted, fontSize: 15),
                                   border: InputBorder.none,
                                 ),
                               ),
@@ -297,7 +308,7 @@ class _FeedbackPageState extends State<FeedbackPage> {
                                 onPressed: _submit,
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: AppColors.lime,
-                                  foregroundColor: const Color(0xFF9EA0A4),
+                                  foregroundColor: Colors.black,
                                   elevation: 0,
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(26),
@@ -324,6 +335,7 @@ class _FeedbackPageState extends State<FeedbackPage> {
           ],
         ),
       );
+  }
 }
 
 /// 图片缩略图 + 删除按钮。

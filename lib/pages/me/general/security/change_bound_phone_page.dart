@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../../../shared/app_colors.dart';
+import '../../../../shared/app_theme.dart';
 
 /// 修改绑定手机号页面。
 class ChangeBoundPhonePage extends StatefulWidget {
@@ -84,13 +85,15 @@ class _ChangeBoundPhonePageState extends State<ChangeBoundPhonePage> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-        backgroundColor: AppColors.pageBg,
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Scaffold(
+        backgroundColor: colors.bg,
         body: Column(
           children: [
             // 顶部导航栏
             Container(
-              color: AppColors.lime,
+              color: colors.surface,
               child: SafeArea(
                 bottom: false,
                 child: SizedBox(
@@ -103,13 +106,16 @@ class _ChangeBoundPhonePageState extends State<ChangeBoundPhonePage> {
                         child: IconButton(
                           tooltip: '返回',
                           onPressed: () => Navigator.of(context).pop(),
-                          icon: const Icon(Icons.chevron_left, size: 34),
+                          icon: Icon(Icons.chevron_left,
+                              size: 34, color: colors.surfaceText),
                         ),
                       ),
-                      const Text(
+                      Text(
                         '修改绑定手机号',
                         style: TextStyle(
-                            fontSize: 20, fontWeight: FontWeight.w700),
+                            fontSize: 20,
+                            fontWeight: FontWeight.w700,
+                            color: colors.surfaceText),
                       ),
                     ],
                   ),
@@ -135,10 +141,10 @@ class _ChangeBoundPhonePageState extends State<ChangeBoundPhonePage> {
                             const SizedBox(height: 20),
 
                             // 当前绑定手机号
-                            const Text(
+                            Text(
                               '当前绑定：$_boundPhone',
                               style: TextStyle(
-                                  fontSize: 15, color: AppColors.muted),
+                                  fontSize: 15, color: colors.muted),
                             ),
 
                             const SizedBox(height: 16),
@@ -168,7 +174,7 @@ class _ChangeBoundPhonePageState extends State<ChangeBoundPhonePage> {
                                 onPressed: _submit,
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: AppColors.lime,
-                                  foregroundColor: const Color(0xFF9EA0A4),
+                                  foregroundColor: Colors.black,
                                   elevation: 0,
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(26),
@@ -195,6 +201,7 @@ class _ChangeBoundPhonePageState extends State<ChangeBoundPhonePage> {
           ],
         ),
       );
+  }
 }
 
 /// 手机号输入框。
@@ -205,28 +212,30 @@ class _PhoneField extends StatelessWidget {
   const _PhoneField({required this.controller, required this.hint});
 
   @override
-  Widget build(BuildContext context) => Container(
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Container(
         height: 56,
         padding: const EdgeInsets.symmetric(horizontal: 16),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: colors.card,
           borderRadius: BorderRadius.circular(12),
         ),
         child: Row(
           children: [
-            const Icon(Icons.phone_iphone, color: AppColors.muted, size: 24),
+            Icon(Icons.phone_iphone, color: colors.muted, size: 24),
             const SizedBox(width: 12),
             Expanded(
               child: TextField(
                 controller: controller,
                 keyboardType: TextInputType.phone,
                 maxLength: 11,
-                style: const TextStyle(fontSize: 16),
+                style: TextStyle(fontSize: 16, color: colors.text),
                 decoration: InputDecoration(
                   counterText: '',
                   hintText: hint,
-                  hintStyle: const TextStyle(
-                      color: AppColors.muted, fontSize: 16),
+                  hintStyle:
+                      TextStyle(color: colors.muted, fontSize: 16),
                   border: InputBorder.none,
                 ),
               ),
@@ -234,6 +243,7 @@ class _PhoneField extends StatelessWidget {
           ],
         ),
       );
+  }
 }
 
 /// 短信验证码输入框 + 获取按钮。
@@ -251,27 +261,29 @@ class _CodeField extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) => Container(
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Container(
         height: 56,
         padding: const EdgeInsets.symmetric(horizontal: 16),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: colors.card,
           borderRadius: BorderRadius.circular(12),
         ),
         child: Row(
           children: [
-            const Icon(Icons.mark_email_read_outlined,
-                color: AppColors.muted, size: 24),
+            Icon(Icons.mark_email_read_outlined,
+                color: colors.muted, size: 24),
             const SizedBox(width: 12),
             Expanded(
               child: TextField(
                 controller: controller,
                 keyboardType: TextInputType.number,
-                style: const TextStyle(fontSize: 16),
+                style: TextStyle(fontSize: 16, color: colors.text),
                 decoration: InputDecoration(
                   hintText: '请输入短信验证码',
-                  hintStyle: const TextStyle(
-                      color: AppColors.muted, fontSize: 16),
+                  hintStyle:
+                      TextStyle(color: colors.muted, fontSize: 16),
                   border: InputBorder.none,
                 ),
               ),
@@ -283,7 +295,7 @@ class _CodeField extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 15,
                   color: isCounting
-                      ? const Color(0xFFB6BBC2)
+                      ? colors.muted
                       : const Color(0xFF4ECDC4),
                 ),
               ),
@@ -291,4 +303,5 @@ class _CodeField extends StatelessWidget {
           ],
         ),
       );
+  }
 }

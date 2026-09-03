@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../../shared/app_colors.dart';
+import '../../../shared/app_theme.dart';
 import 'security/account_security_page.dart';
 import 'feedback_page.dart';
 import 'about_page.dart';
@@ -23,12 +24,12 @@ class GeneralSettingsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        backgroundColor: AppColors.pageBg,
+        backgroundColor: context.colors.bg,
         body: Column(
           children: [
             // 顶部导航栏
             Container(
-              color: AppColors.lime,
+              color: context.colors.surface,
               child: SafeArea(
                 bottom: false,
                 child: SizedBox(
@@ -40,13 +41,16 @@ class GeneralSettingsPage extends StatelessWidget {
                         alignment: Alignment.centerLeft,
                         child: IconButton(
                           onPressed: () => Navigator.of(context).pop(),
-                          icon: const Icon(Icons.chevron_left, size: 34),
+                          icon: Icon(Icons.chevron_left,
+                              size: 34, color: context.colors.surfaceText),
                         ),
                       ),
-                      const Text(
+                      Text(
                         '通用设置',
                         style: TextStyle(
-                            fontSize: 20, fontWeight: FontWeight.w500),
+                            fontSize: 20,
+                            fontWeight: FontWeight.w500,
+                            color: context.colors.surfaceText),
                       ),
                     ],
                   ),
@@ -92,12 +96,12 @@ class GeneralSettingsPage extends StatelessWidget {
                           title: '网络错误线路优化', trailing: '线路 1'),
                     ],
                   ),
-                  const Padding(
-                    padding: EdgeInsets.fromLTRB(28, 10, 28, 0),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(28, 10, 28, 0),
                     child: Text(
                       '网络链接正常时出现报错可尝试点击此按钮优化线路',
                       style:
-                          TextStyle(fontSize: 14, color: AppColors.muted),
+                          TextStyle(fontSize: 14, color: context.colors.muted),
                     ),
                   ),
                 ],
@@ -115,7 +119,7 @@ class GeneralSettingsPage extends StatelessWidget {
                   child: FilledButton(
                     onPressed: () => _showLogoutConfirm(context),
                     style: FilledButton.styleFrom(
-                      backgroundColor: Colors.white,
+                      backgroundColor: context.colors.card,
                       foregroundColor: const Color(0xFFFF3B5C),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(16),
@@ -139,7 +143,7 @@ class GeneralSettingsPage extends StatelessWidget {
 class _LogoutConfirmDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Dialog(
-        backgroundColor: Colors.white,
+        backgroundColor: context.colors.card,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16),
         ),
@@ -148,17 +152,18 @@ class _LogoutConfirmDialog extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text(
+              Text(
                 '提示',
                 style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.w700,
+                  color: context.colors.text,
                 ),
               ),
               const SizedBox(height: 24),
-              const Text(
+              Text(
                 '是否退出登录',
-                style: TextStyle(fontSize: 16, color: AppColors.muted),
+                style: TextStyle(fontSize: 16, color: context.colors.muted),
               ),
               const SizedBox(height: 32),
               Row(
@@ -169,18 +174,21 @@ class _LogoutConfirmDialog extends StatelessWidget {
                       child: ElevatedButton(
                         onPressed: () => Navigator.of(context).pop(false),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.white,
-                          foregroundColor: Colors.black87,
+                          backgroundColor: context.colors.bg,
+                          foregroundColor: context.colors.text,
                           elevation: 0,
-                          side: const BorderSide(color: Color(0xFFEAEAEA)),
+                          side: BorderSide(color: context.colors.divider),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(23),
                           ),
                         ),
-                        child: const Text(
+                        child: Text(
                           '取消',
                           style: TextStyle(
-                              fontSize: 16, fontWeight: FontWeight.w600),
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: context.colors.text,
+                          ),
                         ),
                       ),
                     ),
@@ -221,7 +229,7 @@ class _SettingGroup extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        color: Colors.white,
+        color: context.colors.card,
         child: Column(children: children),
       );
 }
@@ -237,7 +245,7 @@ class _SectionLabel extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 28),
         child: Text(
           text,
-          style: const TextStyle(fontSize: 19, color: AppColors.muted),
+          style: TextStyle(fontSize: 19, color: context.colors.muted),
         ),
       );
 }
@@ -249,28 +257,31 @@ class _SettingRow extends StatelessWidget {
   const _SettingRow({required this.title, this.trailing, this.onTap});
 
   @override
-  Widget build(BuildContext context) => InkWell(
-        onTap: onTap,
-        child: Container(
-          height: 60,
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-          decoration: const BoxDecoration(
-            border: Border(bottom: BorderSide(color: Color(0xFFE9E9E9))),
-          ),
-          child: Row(
-            children: [
-              Expanded(child: Text(title, style: const TextStyle(fontSize: 21))),
-              if (trailing != null)
-                Text(
-                  trailing!,
-                  style:
-                      const TextStyle(fontSize: 17, color: AppColors.muted),
-                ),
-              const SizedBox(width: 10),
-              const Icon(Icons.chevron_right,
-                  size: 28, color: Color(0xFF9EA3AA)),
-            ],
-          ),
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        height: 60,
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: colors.divider)),
         ),
-      );
+        child: Row(
+          children: [
+            Expanded(
+                child: Text(title,
+                    style: TextStyle(fontSize: 21, color: colors.text))),
+            if (trailing != null)
+              Text(
+                trailing!,
+                style: TextStyle(fontSize: 17, color: colors.muted),
+              ),
+            const SizedBox(width: 10),
+            Icon(Icons.chevron_right, size: 28, color: colors.muted),
+          ],
+        ),
+      ),
+    );
+  }
 }

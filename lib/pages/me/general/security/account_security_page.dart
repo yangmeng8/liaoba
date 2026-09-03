@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../../shared/app_colors.dart';
+import '../../../../shared/app_theme.dart';
 import 'change_bound_phone_page.dart';
 import 'change_password_page.dart';
 
@@ -9,12 +10,14 @@ class AccountSecurityPage extends StatelessWidget {
   const AccountSecurityPage({super.key});
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-        backgroundColor: AppColors.pageBg,
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Scaffold(
+        backgroundColor: colors.bg,
         body: Column(
           children: [
             Container(
-              color: AppColors.lime,
+              color: colors.surface,
               child: SafeArea(
                 bottom: false,
                 child: SizedBox(
@@ -27,13 +30,16 @@ class AccountSecurityPage extends StatelessWidget {
                         child: IconButton(
                           tooltip: '返回',
                           onPressed: () => Navigator.of(context).pop(),
-                          icon: const Icon(Icons.chevron_left, size: 34),
+                          icon: Icon(Icons.chevron_left,
+                              size: 34, color: colors.surfaceText),
                         ),
                       ),
-                      const Text(
+                      Text(
                         '账户安全',
                         style: TextStyle(
-                            fontSize: 20, fontWeight: FontWeight.w700),
+                            fontSize: 20,
+                            fontWeight: FontWeight.w700,
+                            color: colors.surfaceText),
                       ),
                     ],
                   ),
@@ -45,7 +51,7 @@ class AccountSecurityPage extends StatelessWidget {
                 padding: const EdgeInsets.only(top: 12),
                 children: [
                   Container(
-                    color: Colors.white,
+                    color: colors.card,
                     margin: const EdgeInsets.symmetric(horizontal: 12),
                     child: Column(
                       children: [
@@ -73,6 +79,7 @@ class AccountSecurityPage extends StatelessWidget {
           ],
         ),
       );
+  }
 }
 
 class _SecurityRow extends StatelessWidget {
@@ -83,35 +90,36 @@ class _SecurityRow extends StatelessWidget {
   const _SecurityRow({required this.title, this.trailing, this.onTap});
 
   @override
-  Widget build(BuildContext context) => InkWell(
-        onTap: onTap,
-        child: Container(
-          height: 60,
-          margin: const EdgeInsets.symmetric(horizontal: 16),
-          decoration: BoxDecoration(
-            border: Border(
-              bottom: BorderSide(
-                color: const Color(0xFFE7E7E7),
-                width: title == '修改绑定手机号' ? 0 : 1,
-              ),
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        height: 60,
+        margin: const EdgeInsets.symmetric(horizontal: 16),
+        decoration: BoxDecoration(
+          border: Border(
+            bottom: BorderSide(
+              color: colors.divider,
+              width: title == '修改绑定手机号' ? 0 : 1,
             ),
           ),
-          child: Row(
-            children: [
-              Expanded(
-                  child: Text(title,
-                      style: const TextStyle(fontSize: 21))),
-              if (trailing != null)
-                Text(
-                  trailing!,
-                  style: const TextStyle(
-                      fontSize: 20, color: AppColors.muted),
-                ),
-              const SizedBox(width: 8),
-              const Icon(Icons.chevron_right,
-                  size: 30, color: Color(0xFFB6BBC2)),
-            ],
-          ),
         ),
-      );
+        child: Row(
+          children: [
+            Expanded(
+                child: Text(title,
+                    style: TextStyle(fontSize: 21, color: colors.text))),
+            if (trailing != null)
+              Text(
+                trailing!,
+                style: TextStyle(fontSize: 20, color: colors.muted),
+              ),
+            const SizedBox(width: 8),
+            Icon(Icons.chevron_right, size: 30, color: colors.muted),
+          ],
+        ),
+      ),
+    );
+  }
 }
