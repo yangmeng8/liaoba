@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../../shared/app_colors.dart';
+import 'chat_background_picker_page.dart';
 
 /// 外观模式。
 enum _ThemeMode { followSystem, light, dark }
@@ -130,7 +131,9 @@ class _AppearanceSettingsPageState extends State<AppearanceSettingsPage> {
       );
 
   void _onChatBackground() {
-    // TODO: 跳转聊天背景设置
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const ChatBackgroundPickerPage()),
+    );
   }
 
   void _onFontSettings() {
