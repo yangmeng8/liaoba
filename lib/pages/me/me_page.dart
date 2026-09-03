@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../shared/app_theme.dart';
 import 'general/general_settings_page.dart';
 import 'general/appearanceSettings/appearance_settings_page.dart';
 
@@ -84,12 +85,13 @@ class MePage extends StatelessWidget {
         ),
         Expanded(
           child: Container(
-            color: const Color(0xFFF8F8F8),
+            color: context.colors.bg,
             child: Container(
               clipBehavior: Clip.antiAlias,
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+              decoration: BoxDecoration(
+                color: context.colors.card,
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(22)),
               ),
               child: ListView.builder(
                 padding: const EdgeInsets.only(top: 8),
@@ -100,15 +102,17 @@ class MePage extends StatelessWidget {
                     horizontal: 20,
                     vertical: 0,
                   ),
+                  iconColor: context.colors.text,
                   leading: Icon(items[i].$1, size: 24),
                   title: Text(
                     items[i].$2,
-                    style: const TextStyle(fontSize: 18),
+                    style: TextStyle(
+                        fontSize: 18, color: context.colors.text),
                   ),
-                  trailing: const Icon(
+                  trailing: Icon(
                     Icons.chevron_right,
                     size: 24,
-                    color: Color(0xFFB6BBC2),
+                    color: context.colors.muted,
                   ),
                 ),
               ),
