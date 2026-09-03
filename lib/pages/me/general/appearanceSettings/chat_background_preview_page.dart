@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../../shared/app_colors.dart';
+import '../../../../shared/app_theme.dart';
 import 'chat_background_picker_page.dart';
 
 /// 聊天背景预览页（全屏 PageView + 聊天气泡模拟）。
@@ -53,12 +54,14 @@ class _ChatBackgroundPreviewPageState extends State<ChatBackgroundPreviewPage> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Scaffold(
         body: Column(
           children: [
             // 顶部导航栏（绿色）
             Container(
-              color: AppColors.lime,
+              color: colors.surface,
               child: SafeArea(
                 bottom: false,
                 child: SizedBox(
@@ -69,20 +72,22 @@ class _ChatBackgroundPreviewPageState extends State<ChatBackgroundPreviewPage> {
                       Expanded(
                         child: TextButton(
                           onPressed: _onCancel,
-                          child: const Text(
+                          child: Text(
                             '取消',
                             style: TextStyle(
-                                fontSize: 18, color: Colors.black54),
+                                fontSize: 18, color: colors.surfaceText),
                           ),
                         ),
                       ),
                       // 预览
-                      const Expanded(
+                      Expanded(
                         child: Center(
                           child: Text(
                             '预览',
                             style: TextStyle(
-                                fontSize: 20, fontWeight: FontWeight.w700),
+                                fontSize: 20,
+                                fontWeight: FontWeight.w700,
+                                color: colors.surfaceText),
                           ),
                         ),
                       ),
@@ -92,11 +97,11 @@ class _ChatBackgroundPreviewPageState extends State<ChatBackgroundPreviewPage> {
                           alignment: Alignment.centerRight,
                           child: TextButton(
                             onPressed: _onSet,
-                            child: const Text(
+                            child: Text(
                               '设置',
                               style: TextStyle(
                                   fontSize: 18,
-                                  color: Colors.black,
+                                  color: colors.surfaceText,
                                   fontWeight: FontWeight.w600),
                             ),
                           ),
@@ -122,7 +127,7 @@ class _ChatBackgroundPreviewPageState extends State<ChatBackgroundPreviewPage> {
             SafeArea(
               top: false,
               child: Container(
-                color: Colors.white,
+                color: colors.card,
                 padding:
                     const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
                 child: Row(
@@ -136,7 +141,7 @@ class _ChatBackgroundPreviewPageState extends State<ChatBackgroundPreviewPage> {
                       decoration: BoxDecoration(
                         color: i == _currentIndex
                             ? AppColors.lime
-                            : const Color(0xFFD9D9D9),
+                            : colors.divider,
                         borderRadius: BorderRadius.circular(3),
                       ),
                     ),
@@ -147,13 +152,16 @@ class _ChatBackgroundPreviewPageState extends State<ChatBackgroundPreviewPage> {
           ],
         ),
       );
+  }
 }
 
 /// 设置确认弹框。
 class _SetConfirmDialog extends StatelessWidget {
   @override
-  Widget build(BuildContext context) => Dialog(
-        backgroundColor: Colors.white,
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Dialog(
+        backgroundColor: colors.card,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16),
         ),
@@ -162,18 +170,19 @@ class _SetConfirmDialog extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text(
+              Text(
                 '提示',
                 style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.w700,
+                  color: colors.text,
                 ),
               ),
               const SizedBox(height: 24),
-              const Text(
+              Text(
                 '这会替换你的现有聊天背景，只有你能看到你的聊天背景。',
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 16, color: AppColors.muted),
+                style: TextStyle(fontSize: 16, color: colors.muted),
               ),
               const SizedBox(height: 32),
               Row(
@@ -184,18 +193,20 @@ class _SetConfirmDialog extends StatelessWidget {
                       child: ElevatedButton(
                         onPressed: () => Navigator.of(context).pop(false),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.white,
-                          foregroundColor: Colors.black87,
+                          backgroundColor: colors.bg,
+                          foregroundColor: colors.text,
                           elevation: 0,
-                          side: const BorderSide(color: Color(0xFFEAEAEA)),
+                          side: BorderSide(color: colors.divider),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(23),
                           ),
                         ),
-                        child: const Text(
+                        child: Text(
                           '取消',
                           style: TextStyle(
-                              fontSize: 16, fontWeight: FontWeight.w600),
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color: colors.text),
                         ),
                       ),
                     ),
@@ -228,6 +239,7 @@ class _SetConfirmDialog extends StatelessWidget {
           ),
         ),
       );
+  }
 }
 
 /// 单个预览页：背景图 + 聊天气泡模拟。

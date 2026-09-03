@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../../shared/app_colors.dart';
+import '../../../../shared/app_theme.dart';
 import '../../../../shared/font_scale_manager.dart';
 
 /// 设置字体大小页面。
@@ -28,13 +29,15 @@ class _FontSizeSettingsPageState extends State<FontSizeSettingsPage> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-        backgroundColor: const Color(0xFFEDE7DE),
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Scaffold(
+        backgroundColor: colors.bg,
         body: Column(
           children: [
             // 顶部导航栏：取消 | 设置字体大小 | 完成
             Container(
-              color: AppColors.lime,
+              color: colors.surface,
               child: SafeArea(
                 bottom: false,
                 child: SizedBox(
@@ -44,19 +47,21 @@ class _FontSizeSettingsPageState extends State<FontSizeSettingsPage> {
                       Expanded(
                         child: TextButton(
                           onPressed: _onCancel,
-                          child: const Text(
+                          child: Text(
                             '取消',
-                            style:
-                                TextStyle(fontSize: 18, color: Colors.black87),
+                            style: TextStyle(
+                                fontSize: 18, color: colors.surfaceText),
                           ),
                         ),
                       ),
-                      const Expanded(
+                      Expanded(
                         child: Center(
                           child: Text(
                             '设置字体大小',
                             style: TextStyle(
-                                fontSize: 20, fontWeight: FontWeight.w700),
+                                fontSize: 20,
+                                fontWeight: FontWeight.w700,
+                                color: colors.surfaceText),
                           ),
                         ),
                       ),
@@ -65,11 +70,11 @@ class _FontSizeSettingsPageState extends State<FontSizeSettingsPage> {
                           alignment: Alignment.centerRight,
                           child: TextButton(
                             onPressed: _onDone,
-                            child: const Text(
+                            child: Text(
                               '完成',
                               style: TextStyle(
                                   fontSize: 18,
-                                  color: Colors.black,
+                                  color: colors.surfaceText,
                                   fontWeight: FontWeight.w600),
                             ),
                           ),
@@ -106,7 +111,7 @@ class _FontSizeSettingsPageState extends State<FontSizeSettingsPage> {
                         _Row(
                           isMe: false,
                           scale: _scale,
-                          bubbleColor: Colors.white,
+                          bubbleColor: colors.card,
                           text: '拖动下面的滑块，可设置字体大小',
                         ),
                         const SizedBox(height: 40),
@@ -115,7 +120,7 @@ class _FontSizeSettingsPageState extends State<FontSizeSettingsPage> {
                         _Row(
                           isMe: false,
                           scale: _scale,
-                          bubbleColor: Colors.white,
+                          bubbleColor: colors.card,
                           text:
                               '设置后，会改变APP中的字体大小。如果在使用过程中存在问题或意见，可反馈给我们。',
                         ),
@@ -128,7 +133,7 @@ class _FontSizeSettingsPageState extends State<FontSizeSettingsPage> {
 
             // 底部滑块面板
             Container(
-              color: Colors.white,
+              color: colors.card,
               child: SafeArea(
                 top: false,
                 child: Padding(
@@ -141,7 +146,9 @@ class _FontSizeSettingsPageState extends State<FontSizeSettingsPage> {
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
-                          const Text('A', style: TextStyle(fontSize: 13)),
+                          Text('A',
+                              style: TextStyle(
+                                  fontSize: 13, color: colors.muted)),
                           for (var i = 0; i < 3; i++)
                             Text(
                               FontScaleManager.labels[i],
@@ -151,24 +158,26 @@ class _FontSizeSettingsPageState extends State<FontSizeSettingsPage> {
                                     ? FontWeight.w700
                                     : FontWeight.w400,
                                 color: _index == i
-                                    ? Colors.black
-                                    : AppColors.muted,
+                                    ? colors.text
+                                    : colors.muted,
                               ),
                             ),
-                          const Text(
+                          Text(
                             'A',
                             style: TextStyle(
-                                fontSize: 24, fontWeight: FontWeight.w600),
+                                fontSize: 24,
+                                fontWeight: FontWeight.w600,
+                                color: colors.text),
                           ),
                         ],
                       ),
                       SliderTheme(
                         data: SliderTheme.of(context).copyWith(
                           trackHeight: 2,
-                          activeTrackColor: AppColors.muted,
-                          inactiveTrackColor: AppColors.muted
+                          activeTrackColor: colors.muted,
+                          inactiveTrackColor: colors.muted
                               .withValues(alpha: 0.35),
-                          thumbColor: Colors.white,
+                          thumbColor: colors.card,
                           overlayShape: SliderComponentShape.noOverlay,
                           thumbShape: const RoundSliderThumbShape(
                               enabledThumbRadius: 14),
@@ -190,6 +199,7 @@ class _FontSizeSettingsPageState extends State<FontSizeSettingsPage> {
           ],
         ),
       );
+  }
 }
 
 /// 一行预览气泡（含头像）。

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../../shared/app_colors.dart';
+import '../../../../shared/app_theme.dart';
 import 'chat_background_preview_page.dart';
 
 /// 聊天背景数据模型。
@@ -121,13 +122,15 @@ class _ChatBackgroundPickerPageState extends State<ChatBackgroundPickerPage> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-        backgroundColor: AppColors.pageBg,
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Scaffold(
+        backgroundColor: colors.bg,
         body: Column(
           children: [
             // 顶部导航栏
             Container(
-              color: AppColors.lime,
+              color: colors.surface,
               child: SafeArea(
                 bottom: false,
                 child: SizedBox(
@@ -140,13 +143,16 @@ class _ChatBackgroundPickerPageState extends State<ChatBackgroundPickerPage> {
                         child: IconButton(
                           tooltip: '返回',
                           onPressed: () => Navigator.of(context).pop(),
-                          icon: const Icon(Icons.chevron_left, size: 34),
+                          icon: Icon(Icons.chevron_left,
+                              size: 34, color: colors.surfaceText),
                         ),
                       ),
-                      const Text(
+                      Text(
                         '选择背景图',
                         style: TextStyle(
-                            fontSize: 20, fontWeight: FontWeight.w700),
+                            fontSize: 20,
+                            fontWeight: FontWeight.w700,
+                            color: colors.surfaceText),
                       ),
                     ],
                   ),
@@ -179,6 +185,7 @@ class _ChatBackgroundPickerPageState extends State<ChatBackgroundPickerPage> {
           ],
         ),
       );
+  }
 }
 
 /// 背景图卡片（手机形状 + 选中绿框 + 底部对勾）。
