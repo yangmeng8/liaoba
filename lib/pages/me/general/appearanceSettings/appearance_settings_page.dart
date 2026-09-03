@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../../../../shared/app_colors.dart';
+import '../../../../shared/font_scale_manager.dart';
 import 'chat_background_picker_page.dart';
+import 'font_size_settings_page.dart';
 
 /// 外观模式。
 enum _ThemeMode { followSystem, light, dark }
@@ -68,7 +70,7 @@ class _AppearanceSettingsPageState extends State<AppearanceSettingsPage> {
                         ),
                         _BasicRow(
                           title: '字体设置',
-                          trailing: '标准',
+                          trailing: FontScaleManager.instance.label,
                           onTap: _onFontSettings,
                           hasBottomBorder: false,
                         ),
@@ -136,8 +138,12 @@ class _AppearanceSettingsPageState extends State<AppearanceSettingsPage> {
     );
   }
 
-  void _onFontSettings() {
-    // TODO: 跳转字体大小设置
+  Future<void> _onFontSettings() async {
+    // 从字体设置页返回后，刷新右侧档位显示
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const FontSizeSettingsPage()),
+    );
+    if (mounted) setState(() {});
   }
 }
 

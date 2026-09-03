@@ -4,8 +4,14 @@ import 'pages/contacts/contacts_page.dart';
 import 'pages/me/me_page.dart';
 import 'pages/messages/messages_page.dart';
 import 'shared/app_colors.dart';
+import 'shared/font_scale_manager.dart';
 
-void main() => runApp(const LiaobaApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // 启动时恢复上次选择的字体档位
+  await FontScaleManager.instance.load();
+  runApp(const LiaobaApp());
+}
 
 class LiaobaApp extends StatelessWidget {
   const LiaobaApp({super.key});
@@ -17,6 +23,17 @@ class LiaobaApp extends StatelessWidget {
       useMaterial3: true,
       scaffoldBackgroundColor: const Color(0xFFF8F8F8),
       fontFamily: 'PingFang SC',
+    ),
+    // 全局字体缩放：监听档位变化，重新注入 textScaler
+    builder: (context, child) => ValueListenableBuilder<int>(
+      valueListenable: FontScaleManager.instance.indexNotifier,
+      child: child, // 缓存 MaterialApp 内部子树，避免不必要的重建
+      builder: (context, index, builtChild) => MediaQuery(
+        data: MediaQuery.of(context).copyWith(
+          textScaler: TextScaler.linear(FontScaleManager.scales[index]),
+        ),
+        child: builtChild!,
+      ),
     ),
     home: const HomeShell(),
   );
