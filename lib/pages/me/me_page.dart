@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../shared/app_theme.dart';
 import 'chat_settings_page.dart';
+import 'favorites_page.dart';
 import 'notification_settings_page.dart';
 import 'general/general_settings_page.dart';
 import 'general/appearanceSettings/appearance_settings_page.dart';
@@ -18,6 +19,10 @@ class MePage extends StatelessWidget {
       case '聊天设置':
         return () => Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => const ChatSettingsPage()),
+            );
+      case '我的收藏':
+        return () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const FavoritesPage()),
             );
       case '通知设置':
         return () => Navigator.of(context).push(
