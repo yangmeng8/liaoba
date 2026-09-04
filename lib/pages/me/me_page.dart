@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import '../../shared/app_theme.dart';
 import 'chat_settings_page.dart';
 import 'favorites_page.dart';
+import 'my_qrcode_page.dart';
 import 'notification_settings_page.dart';
+import 'profile_page.dart';
 import 'general/general_settings_page.dart';
 import 'general/appearanceSettings/appearance_settings_page.dart';
 
@@ -11,6 +13,10 @@ class MePage extends StatelessWidget {
 
   static VoidCallback? _onItemTap(String title, BuildContext context) {
     switch (title) {
+      case '个人资料':
+        return () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const ProfilePage()),
+            );
       case '外观设置':
         return () => Navigator.of(context).push(
               MaterialPageRoute(
@@ -87,12 +93,26 @@ class MePage extends StatelessWidget {
                     ),
                   ),
                   const Spacer(),
-                  const Icon(Icons.qr_code_2, color: Colors.white, size: 26),
-                  const SizedBox(width: 10),
-                  const Icon(
-                    Icons.chevron_right,
-                    color: Colors.white,
-                    size: 26,
+                  InkWell(
+                    onTap: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                            builder: (_) => const MyQrcodePage()),
+                      );
+                    },
+                    borderRadius: BorderRadius.circular(20),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: const [
+                        Icon(Icons.qr_code_2, color: Colors.white, size: 26),
+                        SizedBox(width: 10),
+                        Icon(
+                          Icons.chevron_right,
+                          color: Colors.white,
+                          size: 26,
+                        ),
+                      ],
+                    ),
                   ),
                 ],
               ),

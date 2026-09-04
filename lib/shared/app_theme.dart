@@ -78,7 +78,7 @@ class AppTheme {
           bg: Color(0xFFF8F8F8),
           card: Colors.white,
           surface: AppColors.lime,
-          surfaceText: Colors.white, // lime 头配白字
+          surfaceText: Color(0xFF1A1A1A), // lime 头配黑字
           sectionBg: Color(0xFFF0F0F0),
           divider: Color(0xFFE9E9E9),
           text: Color(0xFF1A1A1A),

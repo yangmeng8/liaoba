@@ -30,7 +30,7 @@ class AppHeader extends StatelessWidget {
                       title,
                       style: TextStyle(
                         fontSize: 25,
-                        fontWeight: FontWeight.w800,
+                        fontWeight: FontWeight.w600,
                         color: colors.surfaceText,
                       ),
                     ),
