@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'pages/calls/calls_page.dart';
 import 'pages/contacts/contacts_page.dart';
+import 'pages/logInAndSignUp/login_page.dart';
 import 'pages/me/me_page.dart';
 import 'pages/messages/messages_page.dart';
+import 'services/auth_manager.dart';
 import 'shared/app_colors.dart';
 import 'shared/app_theme.dart';
 import 'shared/font_scale_manager.dart';
@@ -10,9 +12,10 @@ import 'shared/theme_manager.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // 启动时恢复字体档位和主题模式
+  // 启动时恢复字体档位、主题模式和登录态
   await FontScaleManager.instance.load();
   await ThemeManager.instance.load();
+  await AuthManager.instance.load();
   runApp(const LiaobaApp());
 }
 
@@ -37,7 +40,10 @@ class LiaobaApp extends StatelessWidget {
             ),
             child: child!,
           ),
-          home: const HomeShell(),
+          // 登录守卫：已登录进主框架（消息页），未登录进登录页
+          home: AuthManager.instance.isLoggedIn
+              ? const HomeShell()
+              : const LoginPage(),
         ),
       );
 }

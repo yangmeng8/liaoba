@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../../../services/auth_api.dart';
+import '../../../services/auth_manager.dart';
 import '../../../shared/app_colors.dart';
 import '../../../shared/app_theme.dart';
 import '../../logInAndSignUp/login_page.dart';
@@ -14,14 +16,24 @@ class GeneralSettingsPage extends StatelessWidget {
       context: context,
       builder: (ctx) => _LogoutConfirmDialog(),
     );
-    if (confirmed == true && context.mounted) {
-      // TODO: 调用退出登录接口，清除登录态（token、用户信息等）
-      // 清空整个导航栈并跳转登录页，避免用户返回到已登出的页面
-      Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const LoginPage()),
-        (route) => false,
-      );
+    if (confirmed != true || !context.mounted) return;
+
+    // 先调服务端登出（使当前 token 失效），无论成败都继续清理本地
+    try {
+      await AuthApi.logout();
+    } catch (e) {
+      // 服务端登出失败（如网络问题）也照常本地登出，不阻塞流程
+      debugPrint('logout api error: $e');
     }
+
+    // 清除本地登录态（token、用户信息），下次启动需重新登录
+    await AuthManager.instance.clear();
+    if (!context.mounted) return;
+    // 清空整个导航栈并跳转登录页，避免用户返回到已登出的页面
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const LoginPage()),
+      (route) => false,
+    );
   }
 
   @override
