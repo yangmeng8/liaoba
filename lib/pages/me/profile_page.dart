@@ -1,20 +1,131 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import '../../shared/app_theme.dart';
 import 'my_qrcode_page.dart';
+import 'nickname_edit_page.dart';
+import 'signature_edit_page.dart';
 
 /// 个人资料页面。
-class ProfilePage extends StatelessWidget {
+class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
 
-  void _toast(BuildContext context, String msg) => ScaffoldMessenger.of(context)
-      .showSnackBar(SnackBar(content: Text(msg)));
+  @override
+  State<ProfilePage> createState() => _ProfilePageState();
+}
+
+class _ProfilePageState extends State<ProfilePage> {
+  /// 用户选择的头像文件；null 时显示默认占位。
+  XFile? _avatarFile;
+
+  /// 当前昵称（可从编辑页回写）。
+  String _nickname = '李猛';
+
+  /// 当前个性签名。
+  String _signature = '';
+
+  final _picker = ImagePicker();
+
+  void _toast(String msg) =>
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+
+  /// 点击头像行 → 弹出底部选择框。
+  void _onAvatarTap() {
+    final colors = context.colors;
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: colors.card,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        final sheetColors = ctx.colors;
+        return SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _SheetItem(
+                label: '在线拍照',
+                colors: sheetColors,
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _pickAvatar(ImageSource.camera);
+                },
+              ),
+              Container(height: 0.5, color: sheetColors.divider),
+              _SheetItem(
+                label: '本地相册',
+                colors: sheetColors,
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _pickAvatar(ImageSource.gallery);
+                },
+              ),
+              const SizedBox(height: 8),
+              _SheetItem(
+                label: '取消',
+                colors: sheetColors,
+                isDestructive: true,
+                onTap: () => Navigator.pop(ctx),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// 调用 image_picker 拍照 / 选相册。
+  Future<void> _pickAvatar(ImageSource source) async {
+    try {
+      final picked = await _picker.pickImage(
+        source: source,
+        imageQuality: 85,
+        maxWidth: 512,
+        maxHeight: 512,
+      );
+      if (picked != null) {
+        setState(() => _avatarFile = picked);
+        _toast('头像已更新');
+      }
+    } catch (e) {
+      // 用户拒绝权限或取消时 image_picker 会抛异常，这里兜底提示。
+      _toast('无法获取图片：$e');
+    }
+  }
+
+  /// 点击签名行 → 跳转编辑页，保存后回写。
+  Future<void> _onSignatureTap() async {
+    final result = await Navigator.of(context).push<String>(
+      MaterialPageRoute(
+        builder: (_) => SignatureEditPage(initialSignature: _signature),
+      ),
+    );
+    if (result != null && mounted) {
+      setState(() => _signature = result);
+    }
+  }
+
+  /// 点击昵称行 → 跳转编辑页，保存后回写。
+  Future<void> _onNicknameTap() async {
+    final result = await Navigator.of(context).push<String>(
+      MaterialPageRoute(
+        builder: (_) => NicknameEditPage(initialNickname: _nickname),
+      ),
+    );
+    if (result != null && mounted) {
+      setState(() => _nickname = result);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
 
     // 模拟当前用户资料（实际应从状态层读取）
-    const nickname = '李猛';
     const liaoBaId = '97160mek';
     const phone = '18589854829';
 
@@ -71,13 +182,13 @@ class ProfilePage extends StatelessWidget {
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            _avatar,
+                            _buildAvatar(),
                             const SizedBox(width: 8),
                             Icon(Icons.chevron_right,
                                 size: 26, color: colors.muted),
                           ],
                         ),
-                        onTap: () => _toast(context, '更换头像'),
+                        onTap: _onAvatarTap,
                       ),
                       _ProfileRow(
                         title: '昵称',
@@ -86,7 +197,7 @@ class ProfilePage extends StatelessWidget {
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Text(nickname,
+                            Text(_nickname,
                                 style: TextStyle(
                                     fontSize: 16, color: colors.muted)),
                             const SizedBox(width: 4),
@@ -94,7 +205,7 @@ class ProfilePage extends StatelessWidget {
                                 size: 26, color: colors.muted),
                           ],
                         ),
-                        onTap: () => _toast(context, '修改昵称'),
+                        onTap: _onNicknameTap,
                       ),
                       _ProfileRow(
                         title: '聊吧号',
@@ -135,9 +246,28 @@ class ProfilePage extends StatelessWidget {
                         title: '个性签名',
                         colors: colors,
                         showDivider: false,
-                        trailing: Icon(Icons.chevron_right,
-                            size: 26, color: colors.muted),
-                        onTap: () => _toast(context, '修改个性签名'),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Flexible(
+                              child: Text(
+                                _signature.isEmpty ? '添加个性签名' : _signature,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  color: _signature.isEmpty
+                                      ? colors.muted
+                                      : colors.muted,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            Icon(Icons.chevron_right,
+                                size: 26, color: colors.muted),
+                          ],
+                        ),
+                        onTap: _onSignatureTap,
                       ),
                     ],
                   ),
@@ -150,8 +280,30 @@ class ProfilePage extends StatelessWidget {
     );
   }
 
-  /// 圆形头像占位：淡蓝渐变 + 人物图标（模拟截图中的卡通头像）。
-  Widget get _avatar => Container(
+  /// 头像：有选择的图片用 FileImage，否则显示默认占位。
+  Widget _buildAvatar() {
+    const placeholder = _AvatarPlaceholder();
+    if (_avatarFile == null) return placeholder;
+    return Container(
+      width: 46,
+      height: 46,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        image: DecorationImage(
+          image: FileImage(File(_avatarFile!.path)),
+          fit: BoxFit.cover,
+        ),
+      ),
+    );
+  }
+}
+
+/// 默认头像占位：淡蓝渐变 + 人物图标。
+class _AvatarPlaceholder extends StatelessWidget {
+  const _AvatarPlaceholder();
+
+  @override
+  Widget build(BuildContext context) => Container(
         width: 46,
         height: 46,
         decoration: const BoxDecoration(
@@ -169,6 +321,42 @@ class ProfilePage extends StatelessWidget {
           size: 32,
         ),
       );
+}
+
+/// 底部弹框的单条按钮。
+class _SheetItem extends StatelessWidget {
+  final String label;
+  final ThemeColors colors;
+  final VoidCallback onTap;
+  final bool isDestructive;
+
+  const _SheetItem({
+    required this.label,
+    required this.colors,
+    required this.onTap,
+    this.isDestructive = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        width: double.infinity,
+        height: 56,
+        alignment: Alignment.center,
+        color: colors.card,
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 17,
+            fontWeight: FontWeight.w500,
+            color: isDestructive ? colors.muted : colors.text,
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// 单条资料行。

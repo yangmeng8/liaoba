@@ -26,8 +26,12 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>用于拍摄头像、扫码等</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>用于保存二维码等图片到相册</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>用于选择反馈图片</string>
+	<string>用于选择头像、反馈图片等</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
