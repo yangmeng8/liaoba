@@ -2,6 +2,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../shared/app_colors.dart';
 import '../../shared/app_theme.dart';
+import 'register_page.dart';
+import 'reset_password_page.dart';
 
 /// 登录页：支持「快捷登录」与「密码登录」两种模式切换。
 class LoginPage extends StatefulWidget {
@@ -130,8 +132,8 @@ class _LoginPageState extends State<LoginPage>
 
             // Logo + 聊吧 标题
             Container(
-              width: 120,
-              height: 120,
+              width: 90,
+              height: 90,
               decoration: const BoxDecoration(
                 color: AppColors.lime,
                 shape: BoxShape.circle,
@@ -157,13 +159,14 @@ class _LoginPageState extends State<LoginPage>
                 color: colors.text,
               ),
             ),
-            const SizedBox(height: 40),
+            const SizedBox(height: 20),
 
             // Tab：快捷登录 / 密码登录
             SizedBox(
               width: 240,
               child: TabBar(
                 controller: _tabController,
+                dividerColor: Colors.transparent, // 去掉 TabBar 默认底部分割线
                 indicator: BoxDecoration(
                   border: Border(
                     bottom: BorderSide(color: AppColors.lime, width: 3),
@@ -240,7 +243,7 @@ class _LoginPageState extends State<LoginPage>
                 ),
               ),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 10),
             _buildLoginFooter(colors),
           ],
         ),
@@ -285,8 +288,9 @@ class _LoginPageState extends State<LoginPage>
             children: [
               TextButton(
                 onPressed: () {
-                  // TODO: 跳转到注册页
-                  _toast('跳转注册');
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const RegisterPage()),
+                  );
                 },
                 child: Text(
                   '注册用户',
@@ -295,8 +299,10 @@ class _LoginPageState extends State<LoginPage>
               ),
               TextButton(
                 onPressed: () {
-                  // TODO: 跳转到忘记密码页
-                  _toast('忘记密码');
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                        builder: (_) => const ResetPasswordPage()),
+                  );
                 },
                 child: Text(
                   '忘记密码？',

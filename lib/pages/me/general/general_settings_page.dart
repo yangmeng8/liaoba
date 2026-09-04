@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../../shared/app_colors.dart';
 import '../../../shared/app_theme.dart';
+import '../../logInAndSignUp/login_page.dart';
 import 'security/account_security_page.dart';
 import 'feedback_page.dart';
 import 'about_page.dart';
@@ -13,12 +14,13 @@ class GeneralSettingsPage extends StatelessWidget {
       context: context,
       builder: (ctx) => _LogoutConfirmDialog(),
     );
-    if (confirmed == true) {
-      // TODO: 调用退出登录接口，清除登录态，跳转到登录页
-      if (context.mounted) {
-        Navigator.of(context).pop(); // 关闭当前设置页
-        // Navigator.of(context).pushReplacement(...)
-      }
+    if (confirmed == true && context.mounted) {
+      // TODO: 调用退出登录接口，清除登录态（token、用户信息等）
+      // 清空整个导航栈并跳转登录页，避免用户返回到已登出的页面
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const LoginPage()),
+        (route) => false,
+      );
     }
   }
 
