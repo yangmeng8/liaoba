@@ -109,6 +109,7 @@ class _MessagesPageState extends State<MessagesPage> {
       onRefresh: _load,
       child: ListView.separated(
         physics: const AlwaysScrollableScrollPhysics(),
+        padding: EdgeInsets.zero, // 去掉 ListView 自动加的 MediaQuery 顶部安全区空白
         itemCount: list.length,
         separatorBuilder: (_, _) =>
             Divider(height: 1, indent: 84, endIndent: 16, color: colors.divider),
@@ -155,6 +156,7 @@ class _ConversationTile extends StatelessWidget {
               name: conversation.title,
               avatarUrl: conversation.avatar,
               isGroup: conversation.type == ImConversationType.group,
+              isChannel: conversation.type == ImConversationType.channel,
             ),
             const SizedBox(width: 12),
             // 名称 + 摘要
@@ -217,16 +219,18 @@ class _ConversationTile extends StatelessWidget {
   }
 }
 
-/// 头像：有 URL 加载网络图；群聊无头像时多人图标；其余取名称首字。
+/// 头像：有 URL 加载网络图；群聊多人图标；频道喇叭图标；其余取名称首字。
 class _Avatar extends StatelessWidget {
   final String name;
   final String avatarUrl;
   final bool isGroup;
+  final bool isChannel;
 
   const _Avatar({
     required this.name,
     required this.avatarUrl,
     required this.isGroup,
+    this.isChannel = false,
   });
 
   @override
@@ -250,6 +254,14 @@ class _Avatar extends StatelessWidget {
   }
 
   Widget _fallback(BuildContext context) {
+    if (isChannel) {
+      return Container(
+        color: context.colors.divider,
+        alignment: Alignment.center,
+        child: Icon(Icons.campaign_outlined,
+            size: 30, color: context.colors.muted),
+      );
+    }
     if (isGroup) {
       return Container(
         color: context.colors.divider,

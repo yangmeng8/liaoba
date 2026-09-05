@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 
+import '../shared/json_utils.dart';
 import 'api_client.dart';
 import 'auth_manager.dart';
 
@@ -21,7 +22,7 @@ class AuthApi {
     int scene = SmsScene.memberLogin,
   }) async {
     final resp = await ApiClient.dio.post(
-      '/app-api/member/auth/send-sms-code',
+      '/admin-api/member/auth/send-sms-code',
       data: {'mobile': mobile, 'scene': scene},
     );
     final data = ApiClient.unwrap(resp);
@@ -39,7 +40,7 @@ class AuthApi {
     String region = '',
   }) async {
     final resp = await ApiClient.dio.post(
-      '/app-api/member/auth/sms-register',
+      '/admin-api/member/auth/sms-register',
       data: {
         'mobile': mobile,
         'code': code,
@@ -52,7 +53,7 @@ class AuthApi {
     final data = ApiClient.unwrap(resp);
     if (data is Map) {
       await AuthManager.instance.save(
-        userId: (data['userId'] as num?)?.toInt() ?? 0,
+        userId: asInt(data['userId']),
         accessToken: (data['accessToken'] ?? '').toString(),
         refreshToken: (data['refreshToken'] ?? '').toString(),
         expiresTime: data['expiresTime']?.toString(),
@@ -67,7 +68,7 @@ class AuthApi {
     required String code,
   }) async {
     final resp = await ApiClient.dio.post(
-      '/app-api/member/auth/sms-login',
+      '/admin-api/member/auth/sms-login',
       data: {'mobile': mobile, 'code': code},
     );
     await _saveLoginResp(resp);
@@ -79,8 +80,8 @@ class AuthApi {
     required String password,
   }) async {
     final resp = await ApiClient.dio.post(
-      '/app-api/member/auth/login',
-      data: {'mobile': mobile, 'password': password},
+      '/admin-api/system/auth/login',
+      data: {'username': mobile, 'password': password},
     );
     await _saveLoginResp(resp);
   }
@@ -92,7 +93,7 @@ class AuthApi {
     required String password,
   }) async {
     final resp = await ApiClient.dio.put(
-      '/app-api/member/user/reset-password',
+      '/admin-api/member/user/reset-password',
       data: {'mobile': mobile, 'code': code, 'password': password},
     );
     final data = ApiClient.unwrap(resp);
@@ -102,7 +103,7 @@ class AuthApi {
   /// 退出登录。服务端使当前 token 失效，成功返回 true。
   static Future<bool> logout() async {
     final resp = await ApiClient.dio.post(
-      '/app-api/member/auth/logout',
+      '/admin-api/member/auth/logout',
     );
     final data = ApiClient.unwrap(resp);
     return data == true;
@@ -113,7 +114,7 @@ class AuthApi {
     final data = ApiClient.unwrap(resp);
     if (data is Map) {
       await AuthManager.instance.save(
-        userId: (data['userId'] as num?)?.toInt() ?? 0,
+        userId: asInt(data['userId']),
         accessToken: (data['accessToken'] ?? '').toString(),
         refreshToken: (data['refreshToken'] ?? '').toString(),
         expiresTime: data['expiresTime']?.toString(),

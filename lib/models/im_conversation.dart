@@ -1,3 +1,5 @@
+import '../shared/json_utils.dart';
+
 /// 会话类型（对应后端 ImConversationTypeEnum：1=私聊 2=群聊 3=频道）。
 enum ImConversationType {
   private(1),
@@ -42,15 +44,15 @@ class ImFriend {
 
   factory ImFriend.fromJson(Map<String, dynamic> json) {
     return ImFriend(
-      id: (json['id'] as num?)?.toInt() ?? 0,
-      friendUserId: (json['friendUserId'] as num?)?.toInt() ?? 0,
-      silent: json['silent'] == true,
-      displayName: json['displayName']?.toString() ?? '',
-      pinned: json['pinned'] == true,
-      blocked: json['blocked'] == true,
-      status: (json['status'] as num?)?.toInt() ?? 0,
-      nickname: json['nickname']?.toString() ?? '',
-      avatar: json['avatar']?.toString() ?? '',
+      id: asInt(json['id']),
+      friendUserId: asInt(json['friendUserId']),
+      silent: asBool(json['silent']),
+      displayName: asString(json['displayName']),
+      pinned: asBool(json['pinned']),
+      blocked: asBool(json['blocked']),
+      status: asInt(json['status']),
+      nickname: asString(json['nickname']),
+      avatar: asString(json['avatar']),
     );
   }
 
@@ -85,15 +87,15 @@ class ImGroup {
 
   factory ImGroup.fromJson(Map<String, dynamic> json) {
     return ImGroup(
-      id: (json['id'] as num?)?.toInt() ?? 0,
-      name: json['name']?.toString() ?? '',
-      ownerUserId: (json['ownerUserId'] as num?)?.toInt() ?? 0,
-      avatar: json['avatar']?.toString() ?? '',
-      notice: json['notice']?.toString() ?? '',
-      mutedAll: json['mutedAll'] == true,
-      joinStatus: (json['joinStatus'] as num?)?.toInt() ?? 0,
-      groupRemark: json['groupRemark']?.toString() ?? '',
-      silent: json['silent'] == true,
+      id: asInt(json['id']),
+      name: asString(json['name']),
+      ownerUserId: asInt(json['ownerUserId']),
+      avatar: asString(json['avatar']),
+      notice: asString(json['notice']),
+      mutedAll: asBool(json['mutedAll']),
+      joinStatus: asInt(json['joinStatus']),
+      groupRemark: asString(json['groupRemark']),
+      silent: asBool(json['silent']),
     );
   }
 
@@ -120,12 +122,42 @@ class ImConversationRead {
 
   factory ImConversationRead.fromJson(Map<String, dynamic> json) {
     return ImConversationRead(
-      id: (json['id'] as num?)?.toInt() ?? 0,
+      id: asInt(json['id']),
       conversationType:
-          ImConversationType.fromValue((json['conversationType'] as num?)?.toInt()),
-      targetId: (json['targetId'] as num?)?.toInt() ?? 0,
-      messageId: (json['messageId'] as num?)?.toInt() ?? 0,
+          ImConversationType.fromValue(asInt(json['conversationType'], -1)),
+      targetId: asInt(json['targetId']),
+      messageId: asInt(json['messageId']),
       updateTime: DateTime.tryParse(json['updateTime']?.toString() ?? ''),
+    );
+  }
+}
+
+/// 频道（对应后端 ImChannelRespVO）。
+class ImChannel {
+  final int id;
+  final String code;
+  final String name;
+  final String avatar;
+  final int sort;
+  final int status;
+
+  const ImChannel({
+    required this.id,
+    required this.code,
+    required this.name,
+    required this.avatar,
+    required this.sort,
+    required this.status,
+  });
+
+  factory ImChannel.fromJson(Map<String, dynamic> json) {
+    return ImChannel(
+      id: asInt(json['id']),
+      code: asString(json['code']),
+      name: asString(json['name']),
+      avatar: asString(json['avatar']),
+      sort: asInt(json['sort']),
+      status: asInt(json['status']),
     );
   }
 }

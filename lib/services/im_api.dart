@@ -14,7 +14,7 @@ class ImApi {
     int? maxId,
   }) async {
     final resp = await ApiClient.dio.get(
-      '/app-api/im/message/private/list',
+      '/admin-api/im/message/private/list',
       queryParameters: {
         'receiverId': receiverId,
         'limit': limit,
@@ -38,7 +38,7 @@ class ImApi {
     int? maxId,
   }) async {
     final resp = await ApiClient.dio.get(
-      '/app-api/im/message/group/list',
+      '/admin-api/im/message/group/list',
       queryParameters: {
         'groupId': groupId,
         'limit': limit,
@@ -54,7 +54,7 @@ class ImApi {
 
   /// 获得当前登录用户的好友列表。
   static Future<List<ImFriend>> getFriendList() async {
-    final resp = await ApiClient.dio.get('/app-api/im/friend/list');
+    final resp = await ApiClient.dio.get('/admin-api/im/friend/list');
     final data = ApiClient.unwrap(resp);
     if (data is! List) return const [];
     return data
@@ -64,7 +64,7 @@ class ImApi {
 
   /// 获得当前登录用户的群列表（含已退群的历史群，供展示群名/头像）。
   static Future<List<ImGroup>> getGroupList() async {
-    final resp = await ApiClient.dio.get('/app-api/im/group/list');
+    final resp = await ApiClient.dio.get('/admin-api/im/group/list');
     final data = ApiClient.unwrap(resp);
     if (data is! List) return const [];
     return data
@@ -79,7 +79,7 @@ class ImApi {
     required int size,
   }) async {
     final resp = await ApiClient.dio.get(
-      '/app-api/im/message/private/pull',
+      '/admin-api/im/message/private/pull',
       queryParameters: {'minId': minId, 'size': size},
     );
     final data = ApiClient.unwrap(resp);
@@ -96,7 +96,7 @@ class ImApi {
     required int size,
   }) async {
     final resp = await ApiClient.dio.get(
-      '/app-api/im/message/group/pull',
+      '/admin-api/im/message/group/pull',
       queryParameters: {'minId': minId, 'size': size},
     );
     final data = ApiClient.unwrap(resp);
@@ -113,7 +113,7 @@ class ImApi {
     required int limit,
   }) async {
     final resp = await ApiClient.dio.get(
-      '/app-api/im/conversation-read/pull',
+      '/admin-api/im/conversation-read/pull',
       queryParameters: {
         'lastId': ?lastId,
         'limit': limit,
@@ -123,6 +123,33 @@ class ImApi {
     if (data is! List) return const [];
     return data
         .map((e) => ImConversationRead.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// 获得启用的频道精简列表（频道会话的标题/头像来源）。
+  static Future<List<ImChannel>> getChannelSimpleList() async {
+    final resp =
+        await ApiClient.dio.get('/admin-api/im/manager/channel/simple-list');
+    final data = ApiClient.unwrap(resp);
+    if (data is! List) return const [];
+    return data
+        .map((e) => ImChannel.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// 增量拉取频道消息（minId 游标，频道会话数据源）。
+  static Future<List<ImChannelMessage>> pullChannelMessages({
+    required int minId,
+    required int size,
+  }) async {
+    final resp = await ApiClient.dio.get(
+      '/admin-api/im/channel/message/pull',
+      queryParameters: {'minId': minId, 'size': size},
+    );
+    final data = ApiClient.unwrap(resp);
+    if (data is! List) return const [];
+    return data
+        .map((e) => ImChannelMessage.fromJson(e as Map<String, dynamic>))
         .toList();
   }
 }

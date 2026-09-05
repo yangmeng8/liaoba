@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import '../services/auth_manager.dart';
+import '../shared/json_utils.dart';
 
 /// 私聊历史消息（对应后端 ImPrivateMessageRespVO）。
 class ImPrivateMessage {
@@ -28,14 +29,14 @@ class ImPrivateMessage {
 
   factory ImPrivateMessage.fromJson(Map<String, dynamic> json) {
     return ImPrivateMessage(
-      id: (json['id'] as num?)?.toInt() ?? 0,
-      clientMessageId: json['clientMessageId']?.toString() ?? '',
-      senderId: (json['senderId'] as num?)?.toInt() ?? 0,
-      receiverId: (json['receiverId'] as num?)?.toInt() ?? 0,
-      type: (json['type'] as num?)?.toInt() ?? 0,
-      content: json['content']?.toString() ?? '',
-      status: (json['status'] as num?)?.toInt() ?? 0,
-      receiptStatus: (json['receiptStatus'] as num?)?.toInt() ?? 0,
+      id: asInt(json['id']),
+      clientMessageId: asString(json['clientMessageId']),
+      senderId: asInt(json['senderId']),
+      receiverId: asInt(json['receiverId']),
+      type: asInt(json['type']),
+      content: asString(json['content']),
+      status: asInt(json['status']),
+      receiptStatus: asInt(json['receiptStatus']),
       sendTime: parseDateTime(json['sendTime']),
     );
   }
@@ -80,18 +81,18 @@ class ImGroupMessage {
 
   factory ImGroupMessage.fromJson(Map<String, dynamic> json) {
     return ImGroupMessage(
-      id: (json['id'] as num?)?.toInt() ?? 0,
-      clientMessageId: json['clientMessageId']?.toString() ?? '',
-      senderId: (json['senderId'] as num?)?.toInt() ?? 0,
-      groupId: (json['groupId'] as num?)?.toInt() ?? 0,
-      type: (json['type'] as num?)?.toInt() ?? 0,
-      content: json['content']?.toString() ?? '',
-      status: (json['status'] as num?)?.toInt() ?? 0,
+      id: asInt(json['id']),
+      clientMessageId: asString(json['clientMessageId']),
+      senderId: asInt(json['senderId']),
+      groupId: asInt(json['groupId']),
+      type: asInt(json['type']),
+      content: asString(json['content']),
+      status: asInt(json['status']),
       sendTime: parseDateTime(json['sendTime']),
       atUserIds: parseIntList(json['atUserIds']),
       receiverUserIds: parseIntList(json['receiverUserIds']),
-      receiptStatus: (json['receiptStatus'] as num?)?.toInt() ?? 0,
-      readCount: (json['readCount'] as num?)?.toInt() ?? 0,
+      receiptStatus: asInt(json['receiptStatus']),
+      readCount: asInt(json['readCount']),
     );
   }
 
@@ -101,6 +102,56 @@ class ImGroupMessage {
   /// 消息文本：content 为 JSON 字符串（文本消息形如 {"content":"你好"}），
   /// 解析失败时回退为原始字符串。
   String get textContent => extractTextContent(content);
+}
+
+/// 频道消息（对应后端 ImChannelMessagePullRespVO）。
+class ImChannelMessage {
+  final int id;
+  final int channelId;
+  final int materialId;
+  final int type;
+  final String content;
+  final int receiptStatus;
+  final DateTime? sendTime;
+
+  const ImChannelMessage({
+    required this.id,
+    required this.channelId,
+    required this.materialId,
+    required this.type,
+    required this.content,
+    required this.receiptStatus,
+    this.sendTime,
+  });
+
+  factory ImChannelMessage.fromJson(Map<String, dynamic> json) {
+    return ImChannelMessage(
+      id: asInt(json['id']),
+      channelId: asInt(json['channelId']),
+      materialId: asInt(json['materialId']),
+      type: asInt(json['type']),
+      content: asString(json['content']),
+      receiptStatus: asInt(json['receiptStatus']),
+      sendTime: parseDateTime(json['sendTime']),
+    );
+  }
+
+  /// 摘要：content 为素材 payload JSON 快照（图文卡片等），
+  /// 尝试提取标题类字段，失败回退固定文案。
+  String get summaryText {
+    try {
+      final decoded = jsonDecode(content);
+      if (decoded is Map) {
+        for (final key in ['title', 'name', 'content']) {
+          final v = decoded[key];
+          if (v != null && v.toString().isNotEmpty) return v.toString();
+        }
+      }
+    } catch (_) {
+      // 非 JSON 格式
+    }
+    return '[频道消息]';
+  }
 }
 
 /// 解析后端时间字段：兼容时间戳（num）与 date-time 字符串两种形式。
@@ -123,10 +174,7 @@ List<int> parseIntList(dynamic value) {
     }
   }
   if (parsed is List) {
-    return parsed
-        .map((e) => (e as num?)?.toInt() ?? 0)
-        .where((e) => e > 0)
-        .toList();
+    return parsed.map((e) => asInt(e)).where((e) => e > 0).toList();
   }
   return const [];
 }

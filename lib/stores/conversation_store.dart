@@ -31,6 +31,9 @@ class ConversationStore with ChangeNotifier {
   /// 群元数据（key: groupId），群聊会话的标题/头像来源。
   final Map<int, ImGroup> groups = {};
 
+  /// 频道元数据（key: channelId），频道会话的标题/头像来源。
+  final Map<int, ImChannel> channels = {};
+
   /// 会话读位置（key: type_targetId），未读数计算用。
   final Map<String, int> _readPositions = {};
 
@@ -41,24 +44,30 @@ class ConversationStore with ChangeNotifier {
     // ① 元数据 + 读位置（并行）
     final friendListFuture = ImApi.getFriendList();
     final groupListFuture = ImApi.getGroupList();
+    final channelListFuture = ImApi.getChannelSimpleList();
     final readsFuture = _pullAllReads();
 
     // ② 消息增量全量拉取（并行）
     final privateMsgsFuture = _pullAllPrivate();
     final groupMsgsFuture = _pullAllGroup();
+    final channelMsgsFuture = _pullAllChannel();
 
     final results = await Future.wait([
       friendListFuture,
       groupListFuture,
+      channelListFuture,
       readsFuture,
       privateMsgsFuture,
       groupMsgsFuture,
+      channelMsgsFuture,
     ]);
     final friendList = results[0] as List<ImFriend>;
     final groupList = results[1] as List<ImGroup>;
-    final reads = results[2] as List<ImConversationRead>;
-    final privateMsgs = results[3] as List<ImPrivateMessage>;
-    final groupMsgs = results[4] as List<ImGroupMessage>;
+    final channelList = results[2] as List<ImChannel>;
+    final reads = results[3] as List<ImConversationRead>;
+    final privateMsgs = results[4] as List<ImPrivateMessage>;
+    final groupMsgs = results[5] as List<ImGroupMessage>;
+    final channelMsgs = results[6] as List<ImChannelMessage>;
 
     // ③ 落内存
     friends
@@ -67,13 +76,16 @@ class ConversationStore with ChangeNotifier {
     groups
       ..clear()
       ..addEntries(groupList.map((g) => MapEntry(g.id, g)));
+    channels
+      ..clear()
+      ..addEntries(channelList.map((c) => MapEntry(c.id, c)));
     _readPositions
       ..clear()
       ..addEntries(reads.map(
           (r) => MapEntry('${r.conversationType.value}_${r.targetId}', r.messageId)));
 
     // ④ 客户端聚合重建会话列表
-    conversations = _rebuild(privateMsgs, groupMsgs, myUserId);
+    conversations = _rebuild(privateMsgs, groupMsgs, channelMsgs, myUserId);
     notifyListeners();
   }
 
@@ -107,6 +119,21 @@ class ConversationStore with ChangeNotifier {
     return all;
   }
 
+  /// 循环拉取全部频道消息（minId 游标，升序）。
+  Future<List<ImChannelMessage>> _pullAllChannel() async {
+    final all = <ImChannelMessage>[];
+    var minId = 0;
+    while (true) {
+      final batch =
+          await ImApi.pullChannelMessages(minId: minId, size: _pullPageSize);
+      if (batch.isEmpty) break;
+      all.addAll(batch);
+      if (batch.length < _pullPageSize) break;
+      minId = batch.last.id;
+    }
+    return all;
+  }
+
   /// 循环拉取全部会话读位置（lastId 游标）。
   Future<List<ImConversationRead>> _pullAllReads() async {
     final all = <ImConversationRead>[];
@@ -126,6 +153,7 @@ class ConversationStore with ChangeNotifier {
   List<ImConversation> _rebuild(
     List<ImPrivateMessage> privateMsgs,
     List<ImGroupMessage> groupMsgs,
+    List<ImChannelMessage> channelMsgs,
     int? myUserId,
   ) {
     final me = myUserId ?? -1;
@@ -141,6 +169,12 @@ class ConversationStore with ChangeNotifier {
     final groupById = <int, List<ImGroupMessage>>{};
     for (final m in groupMsgs) {
       groupById.putIfAbsent(m.groupId, () => []).add(m);
+    }
+
+    // 频道：按 channelId 分组
+    final channelById = <int, List<ImChannelMessage>>{};
+    for (final m in channelMsgs) {
+      channelById.putIfAbsent(m.channelId, () => []).add(m);
     }
 
     final result = <ImConversation>[];
@@ -194,6 +228,33 @@ class ConversationStore with ChangeNotifier {
         unreadCount: unread,
         pinned: false,
         silent: group?.silent ?? false,
+      ));
+    }
+
+    for (final entry in channelById.entries) {
+      final channelId = entry.key;
+      final msgs = entry.value;
+      final last = msgs.reduce((a, b) =>
+          (a.sendTime ?? DateTime.fromMillisecondsSinceEpoch(0))
+                  .isAfter(b.sendTime ?? DateTime.fromMillisecondsSinceEpoch(0))
+              ? a
+              : b);
+      final channel = channels[channelId];
+      // 频道为广播消息（无发送人概念），未读 = id 超过读位置的消息数
+      final readId =
+          _readPositions['${ImConversationType.channel.value}_$channelId'] ?? 0;
+      final unread = msgs.where((m) => m.id > readId).length;
+
+      result.add(ImConversation(
+        type: ImConversationType.channel,
+        targetId: channelId,
+        title: channel?.name.isNotEmpty == true ? channel!.name : '频道$channelId',
+        avatar: channel?.avatar ?? '',
+        lastMessageText: last.summaryText,
+        lastMessageTime: last.sendTime,
+        unreadCount: unread,
+        pinned: false,
+        silent: false,
       ));
     }
 
