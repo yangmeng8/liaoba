@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../../services/auth_api.dart';
 import '../../../services/auth_manager.dart';
+import '../../../services/im_websocket.dart';
 import '../../../shared/app_colors.dart';
 import '../../../shared/app_theme.dart';
 import '../../logInAndSignUp/login_page.dart';
@@ -17,6 +18,9 @@ class GeneralSettingsPage extends StatelessWidget {
       builder: (ctx) => _LogoutConfirmDialog(),
     );
     if (confirmed != true || !context.mounted) return;
+
+    // 断开 IM 长连接（置 manualClosed 阻止自动重连）
+    ImWebSocket.instance.disconnect();
 
     // 先调服务端登出（使当前 token 失效），无论成败都继续清理本地
     try {

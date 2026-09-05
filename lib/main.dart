@@ -5,6 +5,7 @@ import 'pages/logInAndSignUp/login_page.dart';
 import 'pages/me/me_page.dart';
 import 'pages/messages/messages_page.dart';
 import 'services/auth_manager.dart';
+import 'services/im_websocket.dart';
 import 'shared/app_colors.dart';
 import 'shared/app_theme.dart';
 import 'shared/font_scale_manager.dart';
@@ -78,6 +79,14 @@ class HomeShell extends StatefulWidget {
 class _HomeShellState extends State<HomeShell> {
   int index = 0;
   final pages = const [MessagesPage(), ContactsPage(), CallsPage(), MePage()];
+
+  @override
+  void initState() {
+    super.initState();
+    // 进入主框架（登录后）启动 IM 长连接，跨页面复用单条连接
+    ImWebSocket.instance.ensure();
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;

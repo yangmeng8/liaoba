@@ -1,18 +1,29 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import '../models/im_conversation.dart';
 import '../models/im_message.dart';
 import '../services/auth_manager.dart';
 import '../services/im_api.dart';
+import '../services/im_websocket.dart';
 
 /// 会话列表 Store：对应 H5 conversationStore——
 /// 无服务端"会话接口"，进入页面时拉取「好友/群元数据 + 消息增量 + 读位置」，
 /// 在客户端由消息流聚合出会话列表（最后一条摘要、未读数、排序）。
 ///
+/// 实时更新：监听 WebSocket 通知（新消息/已读等）与断线补偿事件，
+/// debounce 后全量补拉重建（推送保实时、拉取保最终一致）。
+///
 /// 第一期说明：暂无本地数据库，每次 load 全量拉取（minId=0）后在内存聚合；
 /// 后续引入 sqflite 后改为增量拉取 + 本地缓存。
 class ConversationStore with ChangeNotifier {
-  ConversationStore._();
+  ConversationStore._() {
+    // WebSocket 推送 → 防抖全量补拉（对应 H5 im:message / im:event → 重建会话）
+    ImWebSocket.instance.notificationStream.listen((_) => _scheduleReload());
+    // 断线重连成功 → 立即全量补拉（断线补偿）
+    ImWebSocket.instance.resyncStream.listen((_) => _scheduleReload());
+  }
 
   static final ConversationStore instance = ConversationStore._();
 
@@ -21,6 +32,9 @@ class ConversationStore with ChangeNotifier {
 
   /// 读位置拉取分页大小。
   static const int _readPageSize = 200;
+
+  /// 推送触发的补拉防抖间隔。
+  static const Duration _reloadDebounce = Duration(milliseconds: 800);
 
   /// 聚合出的会话列表（已排序）。
   List<ImConversation> conversations = [];
@@ -37,8 +51,35 @@ class ConversationStore with ChangeNotifier {
   /// 会话读位置（key: type_targetId），未读数计算用。
   final Map<String, int> _readPositions = {};
 
+  /// 拉取并发保护 + 补拉防抖。
+  bool _loading = false;
+  bool _loadedOnce = false;
+  Timer? _reloadTimer;
+
+  /// 推送触发的防抖补拉：窗口内多次通知合并为一次全量拉取。
+  void _scheduleReload() {
+    if (!_loadedOnce) return; // 首次加载由页面触发，避免重复
+    _reloadTimer?.cancel();
+    _reloadTimer = Timer(_reloadDebounce, () {
+      load().catchError((Object e) {
+        debugPrint('[ConversationStore] 推送补拉失败: $e');
+      });
+    });
+  }
+
   /// 拉取并重建会话列表。失败抛出异常由调用方处理。
   Future<void> load() async {
+    if (_loading) return; // 并发保护：在途拉取直接跳过
+    _loading = true;
+    try {
+      await _doLoad();
+      _loadedOnce = true;
+    } finally {
+      _loading = false;
+    }
+  }
+
+  Future<void> _doLoad() async {
     final myUserId = AuthManager.instance.userId;
 
     // ① 元数据 + 读位置（并行）

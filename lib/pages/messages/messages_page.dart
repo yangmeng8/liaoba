@@ -82,8 +82,12 @@ class _MessagesPageState extends State<MessagesPage> {
             onChanged: (i) => setState(() => _filterIndex = i),
           ),
         ),
+        // 订阅 ConversationStore：WebSocket 推送触发的补拉完成后实时刷新列表
         Expanded(
-          child: _buildBody(colors),
+          child: ListenableBuilder(
+            listenable: ConversationStore.instance,
+            builder: (context, _) => _buildBody(colors),
+          ),
         ),
       ],
     );
