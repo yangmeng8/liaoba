@@ -1,5 +1,8 @@
+import 'package:dio/dio.dart';
+
 import 'api_client.dart';
 import '../models/im_conversation.dart';
+import '../models/im_face.dart';
 import '../models/im_message.dart';
 import '../shared/json_utils.dart';
 
@@ -262,6 +265,70 @@ class ImApi {
   static Future<void> recallGroupMessage({required int id}) async {
     await ApiClient.dio.delete(
       '/admin-api/im/message/group/recall',
+      queryParameters: {'id': id},
+    );
+  }
+
+  // ==================== 文件上传 ====================
+
+  /// 上传文件到基础设施文件服务（语音/表情等）。
+  /// [directory] 业务目录，如 im/voice、im/face。返回文件 URL。
+  static Future<String> uploadFile({
+    required String filePath,
+    required String directory,
+    String? fileName,
+  }) async {
+    final form = FormData.fromMap({
+      'directory': directory,
+      'file': await MultipartFile.fromFile(filePath, filename: fileName),
+    });
+    final resp = await ApiClient.dio.post(
+      '/admin-api/infra/file/upload',
+      data: form,
+    );
+    return ApiClient.unwrap(resp).toString();
+  }
+
+  // ==================== 表情包 ====================
+
+  /// 获得所有启用的系统表情包（含 items）。
+  static Future<List<ImFacePack>> getFacePackList() async {
+    final resp = await ApiClient.dio.get('/admin-api/im/face-pack/list');
+    final data = ApiClient.unwrap(resp);
+    if (data is! List) return const [];
+    return data
+        .map((e) => ImFacePack.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// 获得我的个人表情列表。
+  static Future<List<ImFaceItem>> getFaceUserItemList() async {
+    final resp = await ApiClient.dio.get('/admin-api/im/face-user-item/list');
+    final data = ApiClient.unwrap(resp);
+    if (data is! List) return const [];
+    return data
+        .map((e) => ImFaceItem.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// 添加个人表情，返回编号。
+  static Future<int> createFaceUserItem({
+    required String url,
+    required int width,
+    required int height,
+    String name = '',
+  }) async {
+    final resp = await ApiClient.dio.post(
+      '/admin-api/im/face-user-item/create',
+      data: {'url': url, 'name': name, 'width': width, 'height': height},
+    );
+    return asInt(ApiClient.unwrap(resp));
+  }
+
+  /// 删除个人表情。
+  static Future<void> deleteFaceUserItem({required int id}) async {
+    await ApiClient.dio.delete(
+      '/admin-api/im/face-user-item/delete',
       queryParameters: {'id': id},
     );
   }

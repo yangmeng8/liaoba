@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../../shared/app_colors.dart';
 import '../../../../shared/app_theme.dart';
-import 'chat_background_picker_page.dart';
+import '../../../../shared/chat_background.dart';
 
 /// 聊天背景预览页（全屏 PageView + 聊天气泡模拟）。
 class ChatBackgroundPreviewPage extends StatefulWidget {
@@ -255,7 +255,7 @@ class _ChatPreview extends StatelessWidget {
             // 背景底纹
             Positioned.fill(
               child: CustomPaint(
-                painter: _SportsIconPatternPainter(
+                painter: SportsIconPatternPainter(
                   bg.patternColor.withValues(alpha: 0.35),
                 ),
               ),
@@ -337,30 +337,4 @@ class _ChatPreview extends StatelessWidget {
           ],
         ),
       );
-}
-
-/// 底纹 painter（与选择页保持一致）。
-class _SportsIconPatternPainter extends CustomPainter {
-  final Color color;
-  _SportsIconPatternPainter(this.color);
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..strokeWidth = 1.2
-      ..style = PaintingStyle.stroke;
-
-    const step = 36.0;
-    for (double y = 18; y < size.height; y += step) {
-      for (double x = 18; x < size.width; x += step) {
-        canvas.drawCircle(Offset(x, y), 5, paint);
-        canvas.drawLine(Offset(x - 4, y), Offset(x + 4, y), paint);
-        canvas.drawLine(Offset(x, y - 4), Offset(x, y + 4), paint);
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

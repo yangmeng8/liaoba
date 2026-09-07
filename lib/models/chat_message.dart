@@ -1,7 +1,9 @@
+import 'dart:convert';
 import 'dart:math';
 
 import '../models/im_message.dart';
 import '../services/auth_manager.dart';
+import '../shared/json_utils.dart';
 
 /// 本地消息状态（乐观更新状态机）：
 /// sending（占位转圈）→ sent（服务端确认）/ failed（可点击重试）。
@@ -12,8 +14,58 @@ class ChatMsgType {
   /// 文本消息。
   static const int text = 101;
 
+  /// 语音消息：content = {"url","duration","size"}。
+  static const int voice = 103;
+
+  /// 图片表情消息：content = {"url","name","width","height"}。
+  static const int face = 115;
+
   /// 好友添加通知（系统消息）。
   static const int friendAdded = 1204;
+}
+
+/// 语音消息 content 结构。
+class VoicePayload {
+  final String url;
+  final int duration;
+
+  const VoicePayload({required this.url, required this.duration});
+
+  factory VoicePayload.fromJson(Map<String, dynamic> json) => VoicePayload(
+    url: asString(json['url']),
+    duration: asInt(json['duration']),
+  );
+
+  Map<String, dynamic> toJson() => {'url': url, 'duration': duration};
+}
+
+/// 图片表情消息 content 结构。
+class FacePayload {
+  final String url;
+  final String name;
+  final int width;
+  final int height;
+
+  const FacePayload({
+    required this.url,
+    this.name = '',
+    this.width = 200,
+    this.height = 200,
+  });
+
+  factory FacePayload.fromJson(Map<String, dynamic> json) => FacePayload(
+    url: asString(json['url']),
+    name: asString(json['name']),
+    width: asInt(json['width'], 200),
+    height: asInt(json['height'], 200),
+  );
+
+  Map<String, dynamic> toJson() => {
+    'url': url,
+    'name': name,
+    'width': width,
+    'height': height,
+  };
 }
 
 /// 聊天页统一消息模型：
@@ -100,6 +152,34 @@ class ChatMessage {
     isSelf: true,
   );
 
+  /// 本地语音占位（上传完成前转圈）。
+  factory ChatMessage.localVoice({
+    required String clientMessageId,
+    required VoicePayload payload,
+  }) => ChatMessage(
+    clientMessageId: clientMessageId,
+    senderId: AuthManager.instance.userId ?? 0,
+    type: ChatMsgType.voice,
+    content: jsonEncode(payload.toJson()),
+    sendTime: DateTime.now(),
+    status: ChatMessageStatus.sending,
+    isSelf: true,
+  );
+
+  /// 本地表情占位（本地即时显示，服务端确认后替换）。
+  factory ChatMessage.localFace({
+    required String clientMessageId,
+    required FacePayload payload,
+  }) => ChatMessage(
+    clientMessageId: clientMessageId,
+    senderId: AuthManager.instance.userId ?? 0,
+    type: ChatMsgType.face,
+    content: jsonEncode(payload.toJson()),
+    sendTime: DateTime.now(),
+    status: ChatMessageStatus.sending,
+    isSelf: true,
+  );
+
   /// 更新本地状态（占位 → sent/failed）。
   ChatMessage withStatus(ChatMessageStatus s) => ChatMessage(
     id: id,
@@ -115,6 +195,31 @@ class ChatMessage {
   /// 唯一 key：服务端消息用 id，本地占位用 clientMessageId（去重/替换用）。
   String get key => id != null ? 's$id' : 'c$clientMessageId';
 
+  /// 解析后的 content Map（解析失败返回空 Map）。
+  Map<String, dynamic> get contentMap {
+    try {
+      final decoded = jsonDecode(content);
+      if (decoded is Map<String, dynamic>) return decoded;
+    } catch (_) {
+      // 非 JSON
+    }
+    return const {};
+  }
+
+  /// 语音消息 payload（非语音消息返回 null）。
+  VoicePayload? get voicePayload => type == ChatMsgType.voice
+      ? (contentMap['url'] != null && contentMap['url'].toString().isNotEmpty
+            ? VoicePayload.fromJson(contentMap)
+            : null)
+      : null;
+
+  /// 表情消息 payload（非表情消息返回 null）。
+  FacePayload? get facePayload => type == ChatMsgType.face
+      ? (contentMap['url'] != null && contentMap['url'].toString().isNotEmpty
+            ? FacePayload.fromJson(contentMap)
+            : null)
+      : null;
+
   /// 是否可长按操作（文本消息 + 已被服务端确认）。
   bool get operable =>
       isSelf && type == ChatMsgType.text && status == ChatMessageStatus.sent;
@@ -124,6 +229,10 @@ class ChatMessage {
     switch (type) {
       case ChatMsgType.text:
         return extractTextContent(content);
+      case ChatMsgType.voice:
+        return '[语音]';
+      case ChatMsgType.face:
+        return '[表情]';
       case ChatMsgType.friendAdded:
         return '我们已成为好友，开始聊天吧';
       default:
@@ -136,6 +245,8 @@ class ChatMessage {
   bool get isCenteredNotice =>
       !isSelf &&
       type != ChatMsgType.text &&
+      type != ChatMsgType.voice &&
+      type != ChatMsgType.face &&
       status == ChatMessageStatus.sent &&
       senderId != 0; // 频道素材仍走气泡
 }

@@ -2,17 +2,22 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:just_audio/just_audio.dart';
 
 import '../../models/chat_message.dart';
 import '../../models/im_conversation.dart';
+import '../../models/im_face.dart';
 import '../../models/im_ws_frame.dart';
 import '../../services/api_client.dart';
 import '../../services/im_api.dart';
 import '../../services/im_websocket.dart';
 import '../../shared/app_colors.dart';
 import '../../shared/app_theme.dart';
+import '../../shared/chat_background.dart';
 import '../../shared/json_utils.dart';
 import '../../stores/conversation_store.dart';
+import 'face_picker_sheet.dart';
+import 'hold_to_talk_button.dart';
 
 /// 聊天页（对应 H5 MessagePanel）：
 /// - 首屏 maxId=null 拉最新一页；reverse ListView 向上滚动 maxId 游标翻页
@@ -57,11 +62,22 @@ class _ChatPageState extends State<ChatPage> {
   /// 对方已读位置（私聊「已读/未读」小字）。
   int _peerMaxReadId = 0;
 
+  /// 输入模式：false=键盘（文本框），true=语音（按住说话）。
+  bool _voiceMode = false;
+
+  /// 表情面板展开状态（展开在输入栏下方，输入框保持可见）。
+  bool _facePanelOpen = false;
+
+  /// 语音播放器（会话内单实例，单条播放）。
+  final AudioPlayer _audioPlayer = AudioPlayer();
+  String? _playingVoiceKey;
+
   /// 频道消息全量缓存（频道无 list 接口，读 pull 结果内存分页）。
   List<ChatMessage>? _channelAll;
 
   final _scrollCtrl = ScrollController();
   final _inputCtrl = TextEditingController();
+  final _inputFocus = FocusNode();
   StreamSubscription? _wsSub;
   Timer? _wsRefreshTimer;
 
@@ -73,6 +89,12 @@ class _ChatPageState extends State<ChatPage> {
   void initState() {
     super.initState();
     _scrollCtrl.addListener(_onScroll);
+    // 点输入框弹键盘时自动收起表情面板（否则键盘+面板同屏会溢出）
+    _inputFocus.addListener(() {
+      if (_inputFocus.hasFocus && _facePanelOpen) {
+        setState(() => _facePanelOpen = false);
+      }
+    });
     _wsSub = ImWebSocket.instance.notificationStream.listen((n) {
       if (_matchesCurrentConversation(n)) {
         // 防抖合并：短时间多条通知只刷新一次
@@ -89,6 +111,8 @@ class _ChatPageState extends State<ChatPage> {
     _wsRefreshTimer?.cancel();
     _scrollCtrl.dispose();
     _inputCtrl.dispose();
+    _inputFocus.dispose();
+    _audioPlayer.dispose();
     // 已读上报后让会话列表未读数归零（静默，失败忽略）
     if (_lastReportedReadId > 0) {
       ConversationStore.instance.load().catchError((Object _) {});
@@ -280,6 +304,117 @@ class _ChatPageState extends State<ChatPage> {
     await _performSend(local);
   }
 
+  /// 录音完成（HoldToTalkButton 回调）：上传 → 发送 VOICE 消息。
+  Future<void> _onVoiceRecorded(
+    String filePath,
+    int durationSec,
+    int sizeBytes,
+  ) async {
+    // 上传中先插本地占位（转圈）
+    final clientMessageId = generateClientMessageId();
+    final placeholder = ChatMessage.localVoice(
+      clientMessageId: clientMessageId,
+      payload: VoicePayload(url: '', duration: durationSec),
+    );
+    setState(() => _messages.insert(0, placeholder));
+    _scrollToBottom();
+    String url;
+    try {
+      url = await ImApi.uploadFile(filePath: filePath, directory: 'im/voice');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        final i = _messages.indexWhere(
+          (m) => m.clientMessageId == clientMessageId,
+        );
+        if (i >= 0) {
+          _messages[i] = placeholder.withStatus(ChatMessageStatus.failed);
+        }
+      });
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(ApiClient.errorMessage(e))));
+      return;
+    }
+    if (!mounted) return;
+    // 上传成功：替换为带 url 的消息再走发送
+    final local = ChatMessage.localVoice(
+      clientMessageId: clientMessageId,
+      payload: VoicePayload(url: url, duration: durationSec),
+    );
+    final i = _messages.indexWhere((m) => m.clientMessageId == clientMessageId);
+    if (i >= 0) setState(() => _messages[i] = local);
+    await _performSend(local);
+  }
+
+  /// 发送图片表情（表情面板点击 → 立即发送独立 FACE 消息）。
+  Future<void> _sendFace(ImFaceItem item) async {
+    final local = ChatMessage.localFace(
+      clientMessageId: generateClientMessageId(),
+      payload: FacePayload(
+        url: item.url,
+        name: item.name,
+        width: item.width,
+        height: item.height,
+      ),
+    );
+    setState(() => _messages.insert(0, local));
+    _scrollToBottom();
+    await _performSend(local);
+  }
+
+  /// 表情面板选中的 emoji：插入输入框光标处（随文本消息一起发送）。
+  void _insertEmoji(String emoji) {
+    final sel = _inputCtrl.selection;
+    final text = _inputCtrl.text;
+    if (text.length + emoji.length > 1000) return; // 与 H5 上限一致
+    if (sel.isValid && !sel.isCollapsed) {
+      // 有选区：替换选区
+      final newText = text.replaceRange(sel.start, sel.end, emoji);
+      _inputCtrl.text = newText;
+      _inputCtrl.selection = TextSelection.collapsed(
+        offset: sel.start + emoji.length,
+      );
+    } else if (sel.isValid) {
+      final newText = text.replaceRange(sel.baseOffset, sel.baseOffset, emoji);
+      _inputCtrl.text = newText;
+      _inputCtrl.selection = TextSelection.collapsed(
+        offset: sel.baseOffset + emoji.length,
+      );
+    } else {
+      _inputCtrl.text = text + emoji;
+    }
+    setState(() {}); // 刷新输入栏状态（输入框在面板上方，插入内容直接可见）
+  }
+
+  /// 播放/停止语音（单实例播放器：再点同一条或切换均先停）。
+  Future<void> _togglePlayVoice(ChatMessage message, String url) async {
+    final key = message.key;
+    if (_playingVoiceKey == key) {
+      await _audioPlayer.stop();
+      if (mounted) setState(() => _playingVoiceKey = null);
+      return;
+    }
+    try {
+      await _audioPlayer.stop();
+      await _audioPlayer.setUrl(url);
+      _audioPlayer.playerStateStream.listen((state) {
+        if ((state.processingState == ProcessingState.completed) && mounted) {
+          setState(() => _playingVoiceKey = null);
+        }
+      });
+      if (mounted) setState(() => _playingVoiceKey = key);
+      await _audioPlayer.play();
+    } catch (_) {
+      if (mounted) {
+        setState(() => _playingVoiceKey = null);
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(const SnackBar(content: Text('语音播放失败')));
+      }
+    }
+  }
+
   /// 执行发送：成功用服务端消息替换占位；失败置 failed（点击气泡可重试，
   /// 复用同一 clientMessageId，服务端幂等保证不重复）。
   Future<void> _performSend(ChatMessage local) async {
@@ -408,16 +543,49 @@ class _ChatPageState extends State<ChatPage> {
   Widget build(BuildContext context) {
     final colors = context.colors;
     return GestureDetector(
-      // 点击空白收起键盘（与登录/注册页一致）
+      // 点击空白收起键盘与表情面板
       behavior: HitTestBehavior.translucent,
-      onTap: () => FocusScope.of(context).unfocus(),
+      onTap: () {
+        FocusScope.of(context).unfocus();
+        if (_facePanelOpen) setState(() => _facePanelOpen = false);
+      },
       child: Scaffold(
         backgroundColor: colors.bg,
-        body: Column(
+        // 关闭 Scaffold 自动缩放，改用手动 viewInsets padding：
+        // 键盘与表情面板严格互斥（面板打开时 padding 恒为 0），
+        // 避免键盘收起动画与面板展开叠加导致 Column 溢出
+        resizeToAvoidBottomInset: false,
+        // 浅色模式用外观设置的默认聊天背景（渐变+点阵）；深色模式保持纯色
+        body: Stack(
           children: [
-            _buildHeader(colors),
-            Expanded(child: _buildMessageList(colors)),
-            _buildInputBar(colors),
+            if (Theme.of(context).brightness == Brightness.light)
+              Positioned.fill(
+                child: ChatBackgroundLayer(bg: defaultChatBackground),
+              ),
+            Column(
+              children: [
+                _buildHeader(colors),
+                Expanded(child: _buildMessageList(colors)),
+                // 输入栏保持在表情面板头顶（微信布局）；键盘弹出时悬于键盘上方
+                Padding(
+                  padding: EdgeInsets.only(
+                    bottom: _facePanelOpen
+                        ? 0
+                        : MediaQuery.of(context).viewInsets.bottom,
+                  ),
+                  child: _buildInputBar(colors),
+                ),
+                // 内嵌表情面板：展开时显示在输入栏下方
+                if (_facePanelOpen)
+                  FacePickerSheet(
+                    onEmojiSelected: (emoji) => _insertEmoji(emoji),
+                    onFaceSelected: (item) {
+                      _sendFace(item);
+                      setState(() => _facePanelOpen = false);
+                    },
+                  ),
+              ],
+            ),
           ],
         ),
       ),
@@ -528,6 +696,13 @@ class _ChatPageState extends State<ChatPage> {
           older: older,
           showReadState: _isPrivate,
           peerMaxReadId: _peerMaxReadId,
+          playingVoiceKey: _playingVoiceKey,
+          onPlayVoice: (m) {
+            final url = m.voicePayload?.url;
+            if (url != null && url.isNotEmpty) {
+              _togglePlayVoice(m, normalizeFaceUrl(url));
+            }
+          },
           onRetry: () => _performSend(message),
           onRecall: () => _recall(message),
         );
@@ -552,52 +727,94 @@ class _ChatPageState extends State<ChatPage> {
         ),
       );
     }
+    final isLight = Theme.of(context).brightness == Brightness.light;
     return SafeArea(
       top: false,
+      // 面板展开时输入栏紧贴面板（去掉安全区空隙），底部安全区由面板自身处理
+      bottom: !_facePanelOpen,
       child: Container(
-        color: colors.surface,
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+        // 与聊天背景渐变底端色一致（无缝融入）；深色模式回纯色
+        color: isLight ? const Color(0xFFEDE4D8) : colors.bg,
+        // 底部 10 + SafeArea：保证 home indicator 区域不贴边
+        padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
         child: Row(
           children: [
+            // 语音/键盘模式切换
+            _buildModeToggle(colors),
+            const SizedBox(width: 6),
             Expanded(
-              child: TextField(
-                controller: _inputCtrl,
-                textInputAction: TextInputAction.send,
-                onSubmitted: (_) => _send(),
-                style: TextStyle(fontSize: 15, color: colors.text),
-                decoration: InputDecoration(
-                  hintText: '输入消息...',
-                  hintStyle: TextStyle(fontSize: 15, color: colors.muted),
-                  filled: true,
-                  fillColor: colors.card,
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 9,
-                  ),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(20),
-                    borderSide: BorderSide.none,
-                  ),
-                ),
-              ),
+              child: _voiceMode
+                  ? HoldToTalkButton(onDone: _onVoiceRecorded)
+                  : TextField(
+                      controller: _inputCtrl,
+                      focusNode: _inputFocus,
+                      textInputAction: TextInputAction.send,
+                      onSubmitted: (_) => _send(),
+                      style: TextStyle(fontSize: 15, color: colors.text),
+                      decoration: InputDecoration(
+                        isDense: true,
+                        hintText: '输入消息...',
+                        hintStyle: TextStyle(fontSize: 15, color: colors.muted),
+                        filled: true,
+                        // 比输入栏底色略深的灰米色，形成胶囊区分
+                        fillColor: isLight
+                            ? const Color(0xFFE4E0D8)
+                            : colors.card,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 10,
+                        ),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(22),
+                          borderSide: BorderSide.none,
+                        ),
+                      ),
+                    ),
             ),
-            const SizedBox(width: 8),
-            GestureDetector(
-              onTap: _send,
-              child: Container(
-                width: 40,
-                height: 40,
-                decoration: const BoxDecoration(
-                  color: AppColors.lime,
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.send, size: 18, color: Colors.black),
+            const SizedBox(width: 6),
+            // 表情按钮：切换表情面板（emoji 插入输入框 / 图片表情直接发送）
+            IconButton(
+              onPressed: _toggleFacePanel,
+              icon: Icon(
+                Icons.emoji_emotions_outlined,
+                size: 28,
+                color: _facePanelOpen ? AppColors.lime : colors.text,
               ),
+              visualDensity: VisualDensity.compact,
+            ),
+            const SizedBox(width: 2),
+            // 更多（+）：图片/文件等扩展入口占位
+            IconButton(
+              onPressed: () {}, // TODO: 扩展面板（图片/文件/名片等）
+              icon: Icon(Icons.add_circle_outline, size: 28, color: colors.text),
+              visualDensity: VisualDensity.compact,
             ),
           ],
         ),
       ),
     );
+  }
+
+  /// 语音/键盘切换按钮。
+  Widget _buildModeToggle(ThemeColors colors) {
+    return IconButton(
+      onPressed: () {
+        FocusScope.of(context).unfocus();
+        setState(() => _voiceMode = !_voiceMode);
+      },
+      icon: Icon(
+        _voiceMode ? Icons.keyboard_outlined : Icons.mic_none,
+        size: 24,
+        color: colors.muted,
+      ),
+      visualDensity: VisualDensity.compact,
+    );
+  }
+
+  /// 切换表情面板展开/收起（展开时收起键盘，输入框保持在面板上方）。
+  void _toggleFacePanel() {
+    FocusScope.of(context).unfocus();
+    setState(() => _facePanelOpen = !_facePanelOpen);
   }
 }
 
@@ -609,6 +826,12 @@ class _MessageItem extends StatelessWidget {
   /// 是否显示已读小字（私聊）。
   final bool showReadState;
   final int peerMaxReadId;
+
+  /// 当前正在播放的语音消息 key（null=无播放）。
+  final String? playingVoiceKey;
+
+  /// 点击语音气泡（播放/停止）。
+  final ValueChanged<ChatMessage> onPlayVoice;
   final VoidCallback onRetry;
   final VoidCallback onRecall;
 
@@ -617,6 +840,8 @@ class _MessageItem extends StatelessWidget {
     required this.older,
     required this.showReadState,
     required this.peerMaxReadId,
+    required this.playingVoiceKey,
+    required this.onPlayVoice,
     required this.onRetry,
     required this.onRecall,
   });
@@ -680,13 +905,42 @@ class _MessageItem extends StatelessWidget {
       );
     }
 
+    // 气泡内容按消息类型分发：语音条 / 表情大图 / 文本
+    final Widget content;
+    if (message.type == ChatMsgType.voice && message.voicePayload != null) {
+      content = _VoiceBubbleBody(
+        payload: message.voicePayload!,
+        playing: playingVoiceKey == message.key,
+        selfColor: isSelf,
+        onTap: () => onPlayVoice(message),
+      );
+    } else if (message.type == ChatMsgType.face &&
+        message.facePayload != null) {
+      content = _FaceBubbleBody(
+        payload: message.facePayload!,
+        loading: sending,
+      );
+    } else {
+      content = Text(
+        message.displayText,
+        style: TextStyle(
+          fontSize: 15,
+          height: 1.35,
+          color: isSelf ? Colors.black : colors.text,
+        ),
+      );
+    }
+
     final bubble = GestureDetector(
       // 失败点击重试；正常消息长按弹菜单
       onTap: failed ? onRetry : null,
       onLongPress: message.operable ? () => _showActions(context) : null,
       child: Container(
         constraints: const BoxConstraints(maxWidth: 260),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        padding: message.type == ChatMsgType.face
+            ? EdgeInsets
+                  .zero // 表情大图不加内边距
+            : const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
         decoration: BoxDecoration(
           color: isSelf ? AppColors.lime : colors.card,
           borderRadius: BorderRadius.only(
@@ -696,14 +950,7 @@ class _MessageItem extends StatelessWidget {
             bottomRight: Radius.circular(isSelf ? 4 : 12),
           ),
         ),
-        child: Text(
-          message.displayText,
-          style: TextStyle(
-            fontSize: 15,
-            height: 1.35,
-            color: isSelf ? Colors.black : colors.text,
-          ),
-        ),
+        child: content,
       ),
     );
 
@@ -792,6 +1039,120 @@ class _MessageItem extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// 语音气泡体：宽度按时长线性映射（80 + duration×10，封顶 220），
+/// 喇叭图标 + 时长文本；点击播放/停止（对应 H5 message-bubble 语音条）。
+class _VoiceBubbleBody extends StatelessWidget {
+  final VoicePayload payload;
+  final bool playing;
+  final bool selfColor;
+  final VoidCallback onTap;
+
+  const _VoiceBubbleBody({
+    required this.payload,
+    required this.playing,
+    required this.selfColor,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final width = (80 + payload.duration * 10).clamp(80, 220).toDouble();
+    final fg = selfColor ? Colors.black : context.colors.text;
+    return GestureDetector(
+      onTap: onTap,
+      child: SizedBox(
+        width: width,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            // 左侧图标（对方消息）/右侧图标（自己消息，保持喇叭朝向聊天方）
+            if (!selfColor)
+              Icon(
+                playing ? Icons.graphic_eq : Icons.play_arrow,
+                size: 22,
+                color: selfColor ? Colors.black : context.colors.muted,
+              ),
+            Text(
+              '${payload.duration}"',
+              style: TextStyle(fontSize: 14, color: fg),
+            ),
+            if (selfColor)
+              Icon(
+                playing ? Icons.graphic_eq : Icons.play_arrow,
+                size: 22,
+                color: Colors.black,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 表情气泡体：大图等比显示（约 120px），加载失败降级显示 [表情名] 文本。
+class _FaceBubbleBody extends StatelessWidget {
+  final FacePayload payload;
+  final bool loading;
+
+  const _FaceBubbleBody({required this.payload, required this.loading});
+
+  @override
+  Widget build(BuildContext context) {
+    // 等比：限制最大边 120
+    var w = payload.width.toDouble();
+    var h = payload.height.toDouble();
+    if (w <= 0 || h <= 0) {
+      w = 120;
+      h = 120;
+    } else if (w > h) {
+      h = h * 120 / w;
+      w = 120;
+    } else {
+      w = w * 120 / h;
+      h = 120;
+    }
+    final url = normalizeFaceUrl(payload.url);
+    return SizedBox(
+      width: w,
+      height: h,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Image.network(
+              url,
+              fit: BoxFit.contain,
+              errorBuilder: (_, _, _) => Container(
+                alignment: Alignment.center,
+                color: context.colors.divider,
+                child: Text(
+                  payload.name.isNotEmpty ? '[${payload.name}]' : '[表情]',
+                  style: TextStyle(fontSize: 12, color: context.colors.muted),
+                ),
+              ),
+            ),
+          ),
+          if (loading)
+            Container(
+              color: Colors.black26,
+              child: const Center(
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
