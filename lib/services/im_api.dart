@@ -1,6 +1,7 @@
 import 'api_client.dart';
 import '../models/im_conversation.dart';
 import '../models/im_message.dart';
+import '../shared/json_utils.dart';
 
 /// IM 聊天相关接口。
 class ImApi {
@@ -39,11 +40,7 @@ class ImApi {
   }) async {
     final resp = await ApiClient.dio.get(
       '/admin-api/im/message/group/list',
-      queryParameters: {
-        'groupId': groupId,
-        'limit': limit,
-        'maxId': ?maxId,
-      },
+      queryParameters: {'groupId': groupId, 'limit': limit, 'maxId': ?maxId},
     );
     final data = ApiClient.unwrap(resp);
     if (data is! List) return const [];
@@ -114,10 +111,7 @@ class ImApi {
   }) async {
     final resp = await ApiClient.dio.get(
       '/admin-api/im/conversation-read/pull',
-      queryParameters: {
-        'lastId': ?lastId,
-        'limit': limit,
-      },
+      queryParameters: {'lastId': ?lastId, 'limit': limit},
     );
     final data = ApiClient.unwrap(resp);
     if (data is! List) return const [];
@@ -128,8 +122,9 @@ class ImApi {
 
   /// 获得启用的频道精简列表（频道会话的标题/头像来源）。
   static Future<List<ImChannel>> getChannelSimpleList() async {
-    final resp =
-        await ApiClient.dio.get('/admin-api/im/manager/channel/simple-list');
+    final resp = await ApiClient.dio.get(
+      '/admin-api/im/manager/channel/simple-list',
+    );
     final data = ApiClient.unwrap(resp);
     if (data is! List) return const [];
     return data
@@ -151,5 +146,123 @@ class ImApi {
     return data
         .map((e) => ImChannelMessage.fromJson(e as Map<String, dynamic>))
         .toList();
+  }
+
+  // ==================== 消息发送（幂等） ====================
+
+  /// 发送私聊消息。
+  /// [clientMessageId] 客户端生成并随请求上报，服务端据此去重——
+  /// 断网重试不会发出重复消息。返回落库后的服务端消息（失败抛异常）。
+  static Future<ImPrivateMessage?> sendPrivateMessage({
+    required String clientMessageId,
+    required int receiverId,
+    required int type,
+    required String content,
+    bool receipt = true,
+  }) async {
+    final resp = await ApiClient.dio.post(
+      '/admin-api/im/message/private/send',
+      data: {
+        'clientMessageId': clientMessageId,
+        'receiverId': receiverId,
+        'type': type,
+        'content': content,
+        'receipt': receipt,
+      },
+    );
+    final data = ApiClient.unwrap(resp);
+    if (data is Map<String, dynamic>) {
+      return ImPrivateMessage.fromJson(data);
+    }
+    return null; // 后端仅返回布尔等：保留本地消息为已发送态
+  }
+
+  /// 发送群聊消息（[atUserIds] @目标，文本消息为空列表）。
+  static Future<ImGroupMessage?> sendGroupMessage({
+    required String clientMessageId,
+    required int groupId,
+    required int type,
+    required String content,
+    List<int> atUserIds = const [],
+    bool receipt = true,
+  }) async {
+    final resp = await ApiClient.dio.post(
+      '/admin-api/im/message/group/send',
+      data: {
+        'clientMessageId': clientMessageId,
+        'groupId': groupId,
+        'type': type,
+        'content': content,
+        'atUserIds': atUserIds,
+        'receipt': receipt,
+      },
+    );
+    final data = ApiClient.unwrap(resp);
+    if (data is Map<String, dynamic>) {
+      return ImGroupMessage.fromJson(data);
+    }
+    return null;
+  }
+
+  // ==================== 已读上报与对方已读位置 ====================
+
+  /// 私聊已读上报（读到 [messageId]）。参数走 query（后端 @RequestParam）。
+  static Future<void> markPrivateRead({
+    required int receiverId,
+    required int messageId,
+  }) async {
+    await ApiClient.dio.put(
+      '/admin-api/im/message/private/read',
+      queryParameters: {'receiverId': receiverId, 'messageId': messageId},
+    );
+  }
+
+  /// 群聊已读上报。
+  static Future<void> markGroupRead({
+    required int groupId,
+    required int messageId,
+  }) async {
+    await ApiClient.dio.put(
+      '/admin-api/im/message/group/read',
+      queryParameters: {'groupId': groupId, 'messageId': messageId},
+    );
+  }
+
+  /// 频道已读上报。
+  static Future<void> markChannelRead({
+    required int channelId,
+    required int messageId,
+  }) async {
+    await ApiClient.dio.put(
+      '/admin-api/im/channel/message/read',
+      queryParameters: {'channelId': channelId, 'messageId': messageId},
+    );
+  }
+
+  /// 查询私聊对方已读到的消息编号（自己消息下「已读/未读」小字用）。
+  static Future<int> getPrivateMaxReadMessageId({required int peerId}) async {
+    final resp = await ApiClient.dio.get(
+      '/admin-api/im/message/private/max-read-message-id',
+      queryParameters: {'peerId': peerId},
+    );
+    return asInt(ApiClient.unwrap(resp));
+  }
+
+  // ==================== 撤回 ====================
+
+  /// 撤回私聊消息（服务端会向对方推送 RECALL 通知）。
+  static Future<void> recallPrivateMessage({required int id}) async {
+    await ApiClient.dio.delete(
+      '/admin-api/im/message/private/recall',
+      queryParameters: {'id': id},
+    );
+  }
+
+  /// 撤回群聊消息。
+  static Future<void> recallGroupMessage({required int id}) async {
+    await ApiClient.dio.delete(
+      '/admin-api/im/message/group/recall',
+      queryParameters: {'id': id},
+    );
   }
 }

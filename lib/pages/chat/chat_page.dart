@@ -1,0 +1,798 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import '../../models/chat_message.dart';
+import '../../models/im_conversation.dart';
+import '../../models/im_ws_frame.dart';
+import '../../services/api_client.dart';
+import '../../services/im_api.dart';
+import '../../services/im_websocket.dart';
+import '../../shared/app_colors.dart';
+import '../../shared/app_theme.dart';
+import '../../shared/json_utils.dart';
+import '../../stores/conversation_store.dart';
+
+/// 聊天页（对应 H5 MessagePanel）：
+/// - 首屏 maxId=null 拉最新一页；reverse ListView 向上滚动 maxId 游标翻页
+/// - 发送：clientMessageId 幂等 + 占位气泡乐观更新（sending→sent/failed 可重试）
+/// - 实时：WebSocket 通知匹配当前会话 → 防抖刷新最新页合并（撤回/回执/新消息统一覆盖）
+/// - 已读：仅当最新 id 超过已上报位置才调接口（去重标记）
+class ChatPage extends StatefulWidget {
+  final ImConversationType type;
+
+  /// 私聊对方 userId / 群 groupId / 频道 channelId。
+  final int targetId;
+  final String title;
+  final String avatar;
+
+  const ChatPage({
+    super.key,
+    required this.type,
+    required this.targetId,
+    required this.title,
+    this.avatar = '',
+  });
+
+  @override
+  State<ChatPage> createState() => _ChatPageState();
+}
+
+class _ChatPageState extends State<ChatPage> {
+  static const int _pageSize = 20;
+  static const Duration _wsRefreshDebounce = Duration(milliseconds: 300);
+
+  /// index 0 = 最新（配合 reverse ListView：index 0 渲染在底部）。
+  List<ChatMessage> _messages = [];
+  bool _loading = false;
+  bool _loadingMore = false;
+  bool _noMore = false;
+  bool _sending = false;
+  String? _error;
+
+  /// 已读上报去重标记：最新 id 只有超过该位置才重复上报。
+  int _lastReportedReadId = 0;
+
+  /// 对方已读位置（私聊「已读/未读」小字）。
+  int _peerMaxReadId = 0;
+
+  /// 频道消息全量缓存（频道无 list 接口，读 pull 结果内存分页）。
+  List<ChatMessage>? _channelAll;
+
+  final _scrollCtrl = ScrollController();
+  final _inputCtrl = TextEditingController();
+  StreamSubscription? _wsSub;
+  Timer? _wsRefreshTimer;
+
+  bool get _isPrivate => widget.type == ImConversationType.private;
+  bool get _isGroup => widget.type == ImConversationType.group;
+  bool get _isChannel => widget.type == ImConversationType.channel;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollCtrl.addListener(_onScroll);
+    _wsSub = ImWebSocket.instance.notificationStream.listen((n) {
+      if (_matchesCurrentConversation(n)) {
+        // 防抖合并：短时间多条通知只刷新一次
+        _wsRefreshTimer?.cancel();
+        _wsRefreshTimer = Timer(_wsRefreshDebounce, _refreshLatest);
+      }
+    });
+    _loadFirstPage();
+  }
+
+  @override
+  void dispose() {
+    _wsSub?.cancel();
+    _wsRefreshTimer?.cancel();
+    _scrollCtrl.dispose();
+    _inputCtrl.dispose();
+    // 已读上报后让会话列表未读数归零（静默，失败忽略）
+    if (_lastReportedReadId > 0) {
+      ConversationStore.instance.load().catchError((Object _) {});
+    }
+    super.dispose();
+  }
+
+  /// reverse 列表：offset 0=底部，maxScrollExtent=顶部（最旧）。
+  /// 接近顶部触发历史翻页；接近底部触发已读上报（回到底部场景）。
+  void _onScroll() {
+    if (!_scrollCtrl.hasClients) return;
+    final pos = _scrollCtrl.position;
+    if (pos.maxScrollExtent - pos.pixels < 200) {
+      _loadOlder();
+    }
+    if (pos.pixels < 80) {
+      _maybeMarkRead();
+    }
+  }
+
+  // ==================== 数据加载 ====================
+
+  Future<void> _loadFirstPage() async {
+    if (_loading) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final list = await _query(maxId: null);
+      if (!mounted) return;
+      setState(() => _messages = list);
+      if (list.length < _pageSize) _noMore = true;
+      _maybeMarkRead();
+      if (_isPrivate) _loadPeerRead();
+    } catch (e) {
+      if (mounted) {
+        setState(() => _error = ApiClient.errorMessage(e));
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  /// 按会话类型分流查询（对应 H5 queryMessages）。
+  Future<List<ChatMessage>> _query({int? maxId}) async {
+    if (_isPrivate) {
+      final list = await ImApi.getPrivateMessageList(
+        receiverId: widget.targetId,
+        limit: _pageSize,
+        maxId: maxId,
+      );
+      return list.map(ChatMessage.fromPrivate).toList();
+    }
+    if (_isGroup) {
+      final list = await ImApi.getGroupMessageList(
+        groupId: widget.targetId,
+        limit: _pageSize,
+        maxId: maxId,
+      );
+      return list.map(ChatMessage.fromGroup).toList();
+    }
+    // 频道：无服务端 list 接口，读 pull 全量缓存后内存分页
+    final all = await _ensureChannelAll();
+    final filtered = maxId == null
+        ? all
+        : all.where((m) => (m.id ?? 0) < maxId).toList();
+    return filtered.take(_pageSize).toList();
+  }
+
+  /// 频道消息全量缓存：循环 pull 拉全（上限 10 页，测试环境频道消息量少）。
+  Future<List<ChatMessage>> _ensureChannelAll() async {
+    if (_channelAll != null) return _channelAll!;
+    final result = <ChatMessage>[];
+    var minId = 0;
+    for (var i = 0; i < 10; i++) {
+      final page = await ImApi.pullChannelMessages(minId: minId, size: 100);
+      if (page.isEmpty) break;
+      result.addAll(page.map(ChatMessage.fromChannel));
+      if (page.length < 100) break;
+      minId = page.map((m) => m.id).reduce((a, b) => a < b ? a : b);
+    }
+    // id 倒序（最新在前）
+    result.sort((a, b) => (b.id ?? 0).compareTo(a.id ?? 0));
+    _channelAll = result;
+    return result;
+  }
+
+  /// 历史翻页：maxId=已加载最早消息 id（不含），结果追加到列表尾部（更旧方向）。
+  Future<void> _loadOlder() async {
+    if (_loadingMore || _noMore || _loading) return;
+    int? oldestId;
+    for (final m in _messages) {
+      if (m.id != null) {
+        oldestId = m.id;
+        break;
+      }
+    }
+    if (oldestId == null) return; // 全是本地占位，无服务端游标
+    setState(() => _loadingMore = true);
+    try {
+      final older = await _query(maxId: oldestId);
+      if (!mounted) return;
+      setState(() {
+        _messages.addAll(older);
+        if (older.length < _pageSize) _noMore = true;
+      });
+    } catch (_) {
+      // 翻页失败静默：用户可继续滚动重试
+    } finally {
+      if (mounted) setState(() => _loadingMore = false);
+    }
+  }
+
+  /// WebSocket 触发的最新页刷新：拉最新一页与现有列表合并去重
+  /// （新消息插入、撤回/回执覆盖更新；本地 sending/failed 占位保留）。
+  Future<void> _refreshLatest() async {
+    if (_loading) return;
+    final nearBottom = !_scrollCtrl.hasClients || _scrollCtrl.offset < 80;
+    try {
+      final latest = await _query(maxId: null);
+      if (!mounted) return;
+      final map = <String, ChatMessage>{};
+      for (final m in _messages) {
+        map[m.key] = m;
+      }
+      for (final m in latest) {
+        final exist = map[m.key];
+        // 服务端消息覆盖同 id 旧值（撤回/回执变化）；本地占位（c$cmid）不被覆盖
+        if (m.id != null || exist == null) {
+          map[m.key] = m;
+        }
+      }
+      final merged = map.values.toList()
+        ..sort((a, b) {
+          final ka = a.id ?? (1 << 62);
+          final kb = b.id ?? (1 << 62);
+          return kb.compareTo(ka); // id 倒序，本地占位视为最新
+        });
+      setState(() => _messages = merged);
+      if (nearBottom) {
+        _scrollToBottom();
+        _maybeMarkRead();
+      }
+      if (_isPrivate) _loadPeerRead();
+    } catch (_) {
+      // 刷新失败静默：保持现有列表，等待下次通知或 resync
+    }
+  }
+
+  /// 通知是否属于当前会话：类型匹配 + payload 任一目标字段命中 targetId
+  /// （对方发消息时 senderId=targetId；我方消息 receiverId=targetId；已读事件含 peerId 等）。
+  bool _matchesCurrentConversation(ImWsNotification n) {
+    final expected = switch (widget.type) {
+      ImConversationType.private => 1,
+      ImConversationType.group => 2,
+      ImConversationType.channel => 3,
+    };
+    if (n.conversationType != expected) return false;
+    final p = n.payload;
+    for (final key in [
+      'receiverId',
+      'groupId',
+      'channelId',
+      'senderId',
+      'targetId',
+      'peerId',
+    ]) {
+      if (p.containsKey(key) && asInt(p[key]) == widget.targetId) return true;
+    }
+    return false;
+  }
+
+  // ==================== 发送（乐观更新 + 幂等重试） ====================
+
+  Future<void> _send() async {
+    final text = _inputCtrl.text.trim();
+    if (text.isEmpty || _sending) return;
+    _inputCtrl.clear();
+    final local = ChatMessage.localText(
+      clientMessageId: generateClientMessageId(),
+      text: text,
+    );
+    setState(() {
+      _messages.insert(0, local);
+      _noMore = _messages.length < _pageSize ? _noMore : _noMore;
+    });
+    _scrollToBottom();
+    await _performSend(local);
+  }
+
+  /// 执行发送：成功用服务端消息替换占位；失败置 failed（点击气泡可重试，
+  /// 复用同一 clientMessageId，服务端幂等保证不重复）。
+  Future<void> _performSend(ChatMessage local) async {
+    setState(() => _sending = true);
+    try {
+      ChatMessage? server;
+      if (_isPrivate) {
+        final m = await ImApi.sendPrivateMessage(
+          clientMessageId: local.clientMessageId,
+          receiverId: widget.targetId,
+          type: local.type,
+          content: local.content,
+        );
+        server = m != null ? ChatMessage.fromPrivate(m) : null;
+      } else if (_isGroup) {
+        final m = await ImApi.sendGroupMessage(
+          clientMessageId: local.clientMessageId,
+          groupId: widget.targetId,
+          type: local.type,
+          content: local.content,
+        );
+        server = m != null ? ChatMessage.fromGroup(m) : null;
+      }
+      if (!mounted) return;
+      setState(() {
+        final i = _messages.indexWhere(
+          (m) =>
+              m.key == local.key || m.clientMessageId == local.clientMessageId,
+        );
+        if (i >= 0) {
+          _messages[i] = server ?? local.withStatus(ChatMessageStatus.sent);
+        }
+      });
+      _maybeMarkRead();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        final i = _messages.indexWhere(
+          (m) => m.clientMessageId == local.clientMessageId,
+        );
+        if (i >= 0) _messages[i] = local.withStatus(ChatMessageStatus.failed);
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(content: Text(ApiClient.errorMessage(e))));
+      }
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  // ==================== 已读 ====================
+
+  /// 已读上报（去重）：最新服务端消息 id 超过上次上报位置才调接口。
+  void _maybeMarkRead() {
+    int? latestId;
+    for (final m in _messages) {
+      if (m.id != null) {
+        latestId = m.id;
+        break;
+      }
+    }
+    if (latestId == null || latestId <= _lastReportedReadId) return;
+    _lastReportedReadId = latestId;
+    final targetId = widget.targetId;
+    Future<void> req;
+    if (_isPrivate) {
+      req = ImApi.markPrivateRead(receiverId: targetId, messageId: latestId);
+    } else if (_isGroup) {
+      req = ImApi.markGroupRead(groupId: targetId, messageId: latestId);
+    } else {
+      req = ImApi.markChannelRead(channelId: targetId, messageId: latestId);
+    }
+    req.catchError((Object _) {}); // 上报失败静默，下次触发会重试
+  }
+
+  /// 拉取对方已读位置（私聊「已读/未读」小字）。
+  Future<void> _loadPeerRead() async {
+    if (!_isPrivate) return;
+    try {
+      final v = await ImApi.getPrivateMaxReadMessageId(peerId: widget.targetId);
+      if (mounted && v != _peerMaxReadId) {
+        setState(() => _peerMaxReadId = v);
+      }
+    } catch (_) {
+      // 静默：已读小字非关键功能
+    }
+  }
+
+  // ==================== 撤回 ====================
+
+  Future<void> _recall(ChatMessage m) async {
+    final id = m.id;
+    if (id == null) return;
+    try {
+      if (_isGroup) {
+        await ImApi.recallGroupMessage(id: id);
+      } else {
+        await ImApi.recallPrivateMessage(id: id);
+      }
+      // 服务端会向会话推 RECALL 通知 → _refreshLatest 会把该消息
+      // 更新为撤回信号消息；这里先本地立即刷新一次，体验更即时
+      await _refreshLatest();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(content: Text(ApiClient.errorMessage(e))));
+      }
+    }
+  }
+
+  // ==================== UI ====================
+
+  void _scrollToBottom() {
+    if (!_scrollCtrl.hasClients) return;
+    _scrollCtrl.animateTo(
+      0,
+      duration: const Duration(milliseconds: 200),
+      curve: Curves.easeOut,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return GestureDetector(
+      // 点击空白收起键盘（与登录/注册页一致）
+      behavior: HitTestBehavior.translucent,
+      onTap: () => FocusScope.of(context).unfocus(),
+      child: Scaffold(
+        backgroundColor: colors.bg,
+        body: Column(
+          children: [
+            _buildHeader(colors),
+            Expanded(child: _buildMessageList(colors)),
+            _buildInputBar(colors),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 自定义头部：返回 + 居中标题 + 更多（占位）。surface 底色对齐项目导航。
+  Widget _buildHeader(ThemeColors colors) {
+    return Container(
+      color: colors.surface,
+      child: SafeArea(
+        bottom: false,
+        child: SizedBox(
+          height: 48,
+          child: Row(
+            children: [
+              IconButton(
+                icon: const Icon(Icons.arrow_back_ios_new, size: 20),
+                color: colors.surfaceText,
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+              Expanded(
+                child: Text(
+                  widget.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w600,
+                    color: colors.surfaceText,
+                  ),
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.more_horiz, size: 24),
+                color: colors.surfaceText,
+                onPressed: () {}, // TODO: 会话设置/群信息
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMessageList(ThemeColors colors) {
+    if (_loading && _messages.isEmpty) {
+      return const Center(
+        child: CircularProgressIndicator(color: AppColors.lime),
+      );
+    }
+    if (_error != null && _messages.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(_error!, style: TextStyle(fontSize: 14, color: colors.muted)),
+            const SizedBox(height: 12),
+            TextButton(
+              onPressed: _loadFirstPage,
+              child: const Text(
+                '点击重试',
+                style: TextStyle(color: AppColors.lime),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    if (_messages.isEmpty) {
+      return Center(
+        child: Text(
+          '暂无消息，发送第一条吧',
+          style: TextStyle(fontSize: 14, color: colors.muted),
+        ),
+      );
+    }
+    return ListView.builder(
+      controller: _scrollCtrl,
+      reverse: true, // index 0 渲染在底部：新消息 insert(0) 即"滚到底"
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      itemCount: _messages.length + (_loadingMore ? 1 : 0),
+      itemBuilder: (context, index) {
+        if (index == _messages.length) {
+          // reverse 列表尾部（顶部）的加载指示
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 12),
+            child: Center(
+              child: SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: AppColors.lime,
+                ),
+              ),
+            ),
+          );
+        }
+        final message = _messages[index];
+        // 更旧方向的下一条（reverse：index+1 是更早消息），用于时间分隔判断
+        final older = index + 1 < _messages.length
+            ? _messages[index + 1]
+            : null;
+        return _MessageItem(
+          message: message,
+          older: older,
+          showReadState: _isPrivate,
+          peerMaxReadId: _peerMaxReadId,
+          onRetry: () => _performSend(message),
+          onRecall: () => _recall(message),
+        );
+      },
+    );
+  }
+
+  /// 底部输入区：频道为广播订阅，只读不显示输入框。
+  Widget _buildInputBar(ThemeColors colors) {
+    if (_isChannel) {
+      return SafeArea(
+        top: false,
+        child: Container(
+          color: colors.surface,
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          alignment: Alignment.center,
+          child: Text(
+            '频道消息仅推送，不支持回复',
+            style: TextStyle(fontSize: 13, color: colors.muted),
+          ),
+        ),
+      );
+    }
+    return SafeArea(
+      top: false,
+      child: Container(
+        color: colors.surface,
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+        child: Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _inputCtrl,
+                textInputAction: TextInputAction.send,
+                onSubmitted: (_) => _send(),
+                style: TextStyle(fontSize: 15, color: colors.text),
+                decoration: InputDecoration(
+                  hintText: '输入消息...',
+                  hintStyle: TextStyle(fontSize: 15, color: colors.muted),
+                  filled: true,
+                  fillColor: colors.card,
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 9,
+                  ),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(20),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: _send,
+              child: Container(
+                width: 40,
+                height: 40,
+                decoration: const BoxDecoration(
+                  color: AppColors.lime,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.send, size: 18, color: Colors.black),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 单条消息渲染：时间分隔 + 气泡（含状态角标/已读小字/长按菜单）。
+class _MessageItem extends StatelessWidget {
+  final ChatMessage message;
+  final ChatMessage? older;
+
+  /// 是否显示已读小字（私聊）。
+  final bool showReadState;
+  final int peerMaxReadId;
+  final VoidCallback onRetry;
+  final VoidCallback onRecall;
+
+  const _MessageItem({
+    required this.message,
+    required this.older,
+    required this.showReadState,
+    required this.peerMaxReadId,
+    required this.onRetry,
+    required this.onRecall,
+  });
+
+  /// 与更旧一条间隔超过 5 分钟才显示时间分隔。
+  bool get _showTimeDivider {
+    final a = message.sendTime;
+    final b = older?.sendTime;
+    if (a == null || b == null) return true;
+    return a.difference(b).inMinutes.abs() > 5;
+  }
+
+  String _formatTime(DateTime t) =>
+      '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final children = <Widget>[
+      if (_showTimeDivider && message.sendTime != null)
+        Padding(
+          padding: const EdgeInsets.only(top: 6, bottom: 6),
+          child: Center(
+            child: Text(
+              _formatTime(message.sendTime!.toLocal()),
+              style: TextStyle(fontSize: 11, color: colors.muted),
+            ),
+          ),
+        ),
+      if (message.isCenteredNotice)
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Center(
+            child: Text(
+              message.displayText,
+              style: TextStyle(fontSize: 12, color: colors.muted),
+            ),
+          ),
+        )
+      else
+        _buildBubble(context, colors),
+    ];
+    return Column(children: children);
+  }
+
+  Widget _buildBubble(BuildContext context, ThemeColors colors) {
+    final isSelf = message.isSelf;
+    final sending = message.status == ChatMessageStatus.sending;
+    final failed = message.status == ChatMessageStatus.failed;
+
+    // 已读小字（仅私聊自己的已确认消息）
+    Widget? readState;
+    if (showReadState && isSelf && message.id != null) {
+      final read = message.id! <= peerMaxReadId;
+      readState = Padding(
+        padding: const EdgeInsets.only(top: 2, right: 4),
+        child: Text(
+          read ? '已读' : '未读',
+          style: TextStyle(fontSize: 10, color: colors.muted),
+        ),
+      );
+    }
+
+    final bubble = GestureDetector(
+      // 失败点击重试；正常消息长按弹菜单
+      onTap: failed ? onRetry : null,
+      onLongPress: message.operable ? () => _showActions(context) : null,
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 260),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        decoration: BoxDecoration(
+          color: isSelf ? AppColors.lime : colors.card,
+          borderRadius: BorderRadius.only(
+            topLeft: const Radius.circular(12),
+            topRight: const Radius.circular(12),
+            bottomLeft: Radius.circular(isSelf ? 12 : 4),
+            bottomRight: Radius.circular(isSelf ? 4 : 12),
+          ),
+        ),
+        child: Text(
+          message.displayText,
+          style: TextStyle(
+            fontSize: 15,
+            height: 1.35,
+            color: isSelf ? Colors.black : colors.text,
+          ),
+        ),
+      ),
+    );
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        mainAxisAlignment: isSelf
+            ? MainAxisAlignment.end
+            : MainAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          if (isSelf) ..._buildStateIcon(colors, sending, failed),
+          Flexible(
+            child: Column(
+              crossAxisAlignment: isSelf
+                  ? CrossAxisAlignment.end
+                  : CrossAxisAlignment.start,
+              children: [bubble, ?readState],
+            ),
+          ),
+          if (!isSelf) ..._buildStateIcon(colors, sending, failed),
+        ],
+      ),
+    );
+  }
+
+  /// 状态角标：sending 转圈；failed 红色感叹号（可点击重试）。
+  List<Widget> _buildStateIcon(ThemeColors colors, bool sending, bool failed) {
+    if (sending) {
+      return const [
+        Padding(
+          padding: EdgeInsets.only(right: 6),
+          child: SizedBox(
+            width: 12,
+            height: 12,
+            child: CircularProgressIndicator(strokeWidth: 1.5),
+          ),
+        ),
+      ];
+    }
+    if (failed) {
+      return [
+        Padding(
+          padding: const EdgeInsets.only(right: 6),
+          child: GestureDetector(
+            onTap: onRetry,
+            child: Icon(
+              Icons.error_outline,
+              size: 16,
+              color: Colors.red.shade600,
+            ),
+          ),
+        ),
+      ];
+    }
+    return const [];
+  }
+
+  void _showActions(BuildContext context) {
+    HapticFeedback.lightImpact();
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: context.colors.card,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (sheetCtx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.content_copy, size: 22),
+              title: const Text('复制', style: TextStyle(fontSize: 15)),
+              onTap: () {
+                Clipboard.setData(ClipboardData(text: message.displayText));
+                Navigator.pop(sheetCtx);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.undo, size: 22),
+              title: const Text('撤回', style: TextStyle(fontSize: 15)),
+              onTap: () {
+                Navigator.pop(sheetCtx);
+                onRecall();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

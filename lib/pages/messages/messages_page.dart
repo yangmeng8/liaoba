@@ -6,6 +6,7 @@ import '../../shared/app_colors.dart';
 import '../../shared/app_theme.dart';
 import '../../shared/widgets.dart';
 import '../../stores/conversation_store.dart';
+import '../chat/chat_page.dart';
 
 /// 消息 Tab：会话列表（客户端由消息流聚合，对应 H5 conversationStore）。
 class MessagesPage extends StatefulWidget {
@@ -149,7 +150,16 @@ class _ConversationTile extends StatelessWidget {
     final unread = conversation.unreadCount;
     return InkWell(
       onTap: () {
-        // TODO: 跳转聊天页（私聊传 receiverId / 群聊传 groupId）
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => ChatPage(
+              type: conversation.type,
+              targetId: conversation.targetId,
+              title: conversation.title,
+              avatar: conversation.avatar,
+            ),
+          ),
+        );
       },
       child: Container(
         color: colors.bg,
