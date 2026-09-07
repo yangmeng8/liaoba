@@ -1,8 +1,14 @@
 import 'dart:async';
+import 'dart:io';
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:video_player/video_player.dart';
+import 'package:video_thumbnail/video_thumbnail.dart';
 
 import '../../models/chat_message.dart';
 import '../../models/im_conversation.dart';
@@ -48,6 +54,17 @@ class _ChatPageState extends State<ChatPage> {
   static const int _pageSize = 20;
   static const Duration _wsRefreshDebounce = Duration(milliseconds: 300);
 
+  /// 媒体文件大小上限（16MB，与 H5 MESSAGE_MEDIA_MAX_BYTES 一致）。
+  static const int _mediaMaxBytes = 16 * 1024 * 1024;
+
+  /// 危险文件扩展名黑名单（对齐 H5 DANGEROUS_FILE_EXTENSIONS）。
+  static const Set<String> _dangerousExtensions = {
+    'exe', 'bat', 'cmd', 'com', 'cpl', 'dll', 'inf', 'ins', 'inx', 'isu',
+    'job', 'js', 'jse', 'jar', 'lnk', 'msi', 'msp', 'mst', 'paf', 'pif',
+    'ps1', 'reg', 'rgs', 'scr', 'sct', 'shb', 'shs', 'sh', 'vb', 'vbe',
+    'vbs', 'ws', 'wsc', 'wsf', 'wsh', 'html', 'htm',
+  };
+
   /// index 0 = 最新（配合 reverse ListView：index 0 渲染在底部）。
   List<ChatMessage> _messages = [];
   bool _loading = false;
@@ -67,6 +84,9 @@ class _ChatPageState extends State<ChatPage> {
 
   /// 表情面板展开状态（展开在输入栏下方，输入框保持可见）。
   bool _facePanelOpen = false;
+
+  /// 更多（+）面板展开状态：与表情面板、键盘三者互斥。
+  bool _morePanelOpen = false;
 
   /// 语音播放器（会话内单实例，单条播放）。
   final AudioPlayer _audioPlayer = AudioPlayer();
@@ -89,10 +109,13 @@ class _ChatPageState extends State<ChatPage> {
   void initState() {
     super.initState();
     _scrollCtrl.addListener(_onScroll);
-    // 点输入框弹键盘时自动收起表情面板（否则键盘+面板同屏会溢出）
+    // 点输入框弹键盘时自动收起表情面板和更多面板（否则键盘+面板同屏会溢出）
     _inputFocus.addListener(() {
-      if (_inputFocus.hasFocus && _facePanelOpen) {
-        setState(() => _facePanelOpen = false);
+      if (_inputFocus.hasFocus && (_facePanelOpen || _morePanelOpen)) {
+        setState(() {
+          _facePanelOpen = false;
+          _morePanelOpen = false;
+        });
       }
     });
     _wsSub = ImWebSocket.instance.notificationStream.listen((n) {
@@ -363,6 +386,307 @@ class _ChatPageState extends State<ChatPage> {
     await _performSend(local);
   }
 
+  // ==================== 更多（+）面板：图片/视频/文件发送 ====================
+
+  /// 切换更多（+）面板（与表情面板、键盘互斥）。
+  void _toggleMorePanel() {
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _facePanelOpen = false;
+      _morePanelOpen = !_morePanelOpen;
+    });
+  }
+
+  /// 照片 / 拍摄：source 区分相册或相机。
+  Future<void> _handleSendImage(ImageSource source) async {
+    setState(() => _morePanelOpen = false);
+    final picker = ImagePicker();
+    final XFile? file;
+    try {
+      file = await picker.pickImage(source: source, imageQuality: 100);
+    } catch (e) {
+      if (mounted) _showSnack(ApiClient.errorMessage(e));
+      return;
+    }
+    if (file == null) return;
+
+    // 校验大小 ≤ 16MB
+    final length = await file.length();
+    if (length > _mediaMaxBytes) {
+      if (mounted) _showSnack('图片大小不能超过 16MB');
+      return;
+    }
+
+    // 获取本地图片宽高
+    final bytes = await file.readAsBytes();
+    final decoded = await decodeImageFromList(bytes);
+    final width = decoded.width;
+    final height = decoded.height;
+
+    // 占位：url 先放本地路径，气泡直接预览本地图
+    final clientMessageId = generateClientMessageId();
+    final placeholder = ChatMessage.localImage(
+      clientMessageId: clientMessageId,
+      payload: ImagePayload(
+        url: file.path,
+        width: width,
+        height: height,
+        size: length,
+      ),
+    );
+    setState(() => _messages.insert(0, placeholder));
+    _scrollToBottom();
+
+    String url;
+    try {
+      url = await ImApi.uploadFile(
+        filePath: file.path,
+        directory: 'im/message',
+        onSendProgress: (sent, total) =>
+            _updateProgress(clientMessageId, sent / total),
+      );
+    } catch (e) {
+      _markFailed(clientMessageId, e);
+      return;
+    }
+    if (!mounted) return;
+
+    // 上传成功：替换内容为远程 URL，再走发送
+    final local = ChatMessage.localImage(
+      clientMessageId: clientMessageId,
+      payload: ImagePayload(
+        url: url,
+        width: width,
+        height: height,
+        size: length,
+      ),
+    );
+    _replaceMessage(local);
+    await _performSend(local);
+  }
+
+  /// 视频：相册+相机，强制压缩；双文件上传（视频 90% + 封面 10%）。
+  Future<void> _handleSendVideo() async {
+    setState(() => _morePanelOpen = false);
+    final picker = ImagePicker();
+    final XFile? file;
+    try {
+      file = await picker.pickVideo(
+        source: ImageSource.gallery,
+        maxDuration: const Duration(minutes: 5),
+      );
+    } catch (e) {
+      if (mounted) _showSnack(ApiClient.errorMessage(e));
+      return;
+    }
+    if (file == null) return;
+
+    final length = await file.length();
+    if (length > _mediaMaxBytes) {
+      if (mounted) _showSnack('视频大小不能超过 16MB');
+      return;
+    }
+
+    // 读取视频元信息（时长/宽高）并提取封面图
+    int duration = 0;
+    int width = 0;
+    int height = 0;
+    String? coverPath;
+    try {
+      final controller = VideoPlayerController.file(File(file.path));
+      await controller.initialize();
+      duration = controller.value.duration.inSeconds;
+      width = controller.value.size.width.toInt();
+      height = controller.value.size.height.toInt();
+      await controller.dispose();
+      coverPath = await VideoThumbnail.thumbnailFile(
+        video: file.path,
+        imageFormat: ImageFormat.JPEG,
+        maxWidth: 320,
+        quality: 75,
+      );
+    } catch (_) {
+      // 元信息/封面提取失败不阻断发送
+    }
+
+    final clientMessageId = generateClientMessageId();
+    final placeholder = ChatMessage.localVideo(
+      clientMessageId: clientMessageId,
+      payload: VideoPayload(
+        url: file.path,
+        coverUrl: coverPath ?? '',
+        duration: duration,
+        width: width,
+        height: height,
+        size: length,
+      ),
+    );
+    setState(() => _messages.insert(0, placeholder));
+    _scrollToBottom();
+
+    // 上传视频（占 90% 进度）
+    String url;
+    try {
+      url = await ImApi.uploadFile(
+        filePath: file.path,
+        directory: 'im/message',
+        onSendProgress: (sent, total) =>
+            _updateProgress(clientMessageId, (sent / total) * 0.9),
+      );
+    } catch (e) {
+      _markFailed(clientMessageId, e);
+      return;
+    }
+    if (!mounted) return;
+
+    // 上传封面（占 10% 进度）；封面失败不阻断
+    String coverUrl = '';
+    if (coverPath != null) {
+      try {
+        coverUrl = await ImApi.uploadFile(
+          filePath: coverPath,
+          directory: 'im/message',
+          onSendProgress: (sent, total) =>
+              _updateProgress(clientMessageId, 0.9 + (sent / total) * 0.1),
+        );
+      } catch (_) {
+        // 封面上传失败降级：coverUrl 为空，接收端显示首帧
+      }
+    }
+    if (!mounted) return;
+
+    final local = ChatMessage.localVideo(
+      clientMessageId: clientMessageId,
+      payload: VideoPayload(
+        url: url,
+        coverUrl: coverUrl,
+        duration: duration,
+        width: width,
+        height: height,
+        size: length,
+      ),
+    );
+    _replaceMessage(local);
+    await _performSend(local);
+  }
+
+  /// 文件：扩展名黑名单校验 + 16MB 上限。
+  Future<void> _handleSendFile() async {
+    setState(() => _morePanelOpen = false);
+    FilePickerResult? result;
+    try {
+      result = await FilePicker.platform.pickFiles();
+    } catch (e) {
+      if (mounted) _showSnack(ApiClient.errorMessage(e));
+      return;
+    }
+    if (result == null || result.files.isEmpty) return;
+    final f = result.files.first;
+    final path = f.path;
+    if (path == null) return;
+
+    // 危险扩展名黑名单
+    final ext = (f.extension ?? '').toLowerCase();
+    if (_dangerousExtensions.contains(ext)) {
+      if (mounted) _showSnack('该类型文件不支持发送');
+      return;
+    }
+
+    final size = f.size;
+    if (size > _mediaMaxBytes) {
+      if (mounted) _showSnack('文件大小不能超过 16MB');
+      return;
+    }
+
+    final clientMessageId = generateClientMessageId();
+    final placeholder = ChatMessage.localFile(
+      clientMessageId: clientMessageId,
+      payload: FilePayload(
+        url: path,
+        name: f.name,
+        size: size,
+        type: ext,
+      ),
+    );
+    setState(() => _messages.insert(0, placeholder));
+    _scrollToBottom();
+
+    String url;
+    try {
+      url = await ImApi.uploadFile(
+        filePath: path,
+        directory: 'im/file',
+        fileName: f.name,
+        onSendProgress: (sent, total) =>
+            _updateProgress(clientMessageId, sent / total),
+      );
+    } catch (e) {
+      _markFailed(clientMessageId, e);
+      return;
+    }
+    if (!mounted) return;
+
+    final local = ChatMessage.localFile(
+      clientMessageId: clientMessageId,
+      payload: FilePayload(
+        url: url,
+        name: f.name,
+        size: size,
+        type: ext,
+      ),
+    );
+    _replaceMessage(local);
+    await _performSend(local);
+  }
+
+  /// 更新指定消息的上传进度。
+  void _updateProgress(String clientMessageId, double progress) {
+    if (!mounted) return;
+    final p = progress.clamp(0.0, 1.0);
+    setState(() {
+      final i = _messages.indexWhere(
+        (m) => m.clientMessageId == clientMessageId,
+      );
+      if (i >= 0) {
+        _messages[i] = _messages[i].withProgress(p);
+      }
+    });
+  }
+
+  /// 将占位消息替换为上传后的正式消息（保留位置）。
+  void _replaceMessage(ChatMessage local) {
+    if (!mounted) return;
+    setState(() {
+      final i = _messages.indexWhere(
+        (m) => m.clientMessageId == local.clientMessageId,
+      );
+      if (i >= 0) _messages[i] = local.withProgress(null);
+    });
+  }
+
+  /// 上传失败：标记为 failed + 提示。
+  void _markFailed(String clientMessageId, Object e) {
+    if (!mounted) return;
+    setState(() {
+      final i = _messages.indexWhere(
+        (m) => m.clientMessageId == clientMessageId,
+      );
+      if (i >= 0) {
+        _messages[i] = _messages[i]
+            .withStatus(ChatMessageStatus.failed)
+            .withProgress(null);
+      }
+    });
+    _showSnack(ApiClient.errorMessage(e));
+  }
+
+  void _showSnack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(msg)));
+  }
+
   /// 表情面板选中的 emoji：插入输入框光标处（随文本消息一起发送）。
   void _insertEmoji(String emoji) {
     final sel = _inputCtrl.selection;
@@ -467,6 +791,28 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
+  /// 重试失败消息：媒体消息若上传失败（url 仍为本地路径），提示重新选择；
+  /// 其余情况（上传成功但发送失败）直接重走发送接口。
+  void _retryMessage(ChatMessage message) {
+    if (message.status != ChatMessageStatus.failed) return;
+    final isMedia = message.type == ChatMsgType.image ||
+        message.type == ChatMsgType.video ||
+        message.type == ChatMsgType.file;
+    if (isMedia) {
+      final url = message.contentMap['url']?.toString() ?? '';
+      final isLocal = url.startsWith('/') ||
+          url.startsWith('file://') ||
+          !url.startsWith('http');
+      if (isLocal) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(const SnackBar(content: Text('文件已失效，请重新选择发送')));
+        return;
+      }
+    }
+    _performSend(message);
+  }
+
   // ==================== 已读 ====================
 
   /// 已读上报（去重）：最新服务端消息 id 超过上次上报位置才调接口。
@@ -547,7 +893,12 @@ class _ChatPageState extends State<ChatPage> {
       behavior: HitTestBehavior.translucent,
       onTap: () {
         FocusScope.of(context).unfocus();
-        if (_facePanelOpen) setState(() => _facePanelOpen = false);
+        if (_facePanelOpen || _morePanelOpen) {
+          setState(() {
+            _facePanelOpen = false;
+            _morePanelOpen = false;
+          });
+        }
       },
       child: Scaffold(
         backgroundColor: colors.bg,
@@ -569,7 +920,7 @@ class _ChatPageState extends State<ChatPage> {
                 // 输入栏保持在表情面板头顶（微信布局）；键盘弹出时悬于键盘上方
                 Padding(
                   padding: EdgeInsets.only(
-                    bottom: _facePanelOpen
+                    bottom: (_facePanelOpen || _morePanelOpen)
                         ? 0
                         : MediaQuery.of(context).viewInsets.bottom,
                   ),
@@ -584,6 +935,8 @@ class _ChatPageState extends State<ChatPage> {
                       setState(() => _facePanelOpen = false);
                     },
                   ),
+                // 内嵌更多（+）面板：与表情面板互斥
+                if (_morePanelOpen) _buildMorePanel(colors),
               ],
             ),
           ],
@@ -703,7 +1056,7 @@ class _ChatPageState extends State<ChatPage> {
               _togglePlayVoice(m, normalizeFaceUrl(url));
             }
           },
-          onRetry: () => _performSend(message),
+          onRetry: () => _retryMessage(message),
           onRecall: () => _recall(message),
         );
       },
@@ -731,7 +1084,7 @@ class _ChatPageState extends State<ChatPage> {
     return SafeArea(
       top: false,
       // 面板展开时输入栏紧贴面板（去掉安全区空隙），底部安全区由面板自身处理
-      bottom: !_facePanelOpen,
+      bottom: !_facePanelOpen && !_morePanelOpen,
       child: Container(
         // 与聊天背景渐变底端色一致（无缝融入）；深色模式回纯色
         color: isLight ? const Color(0xFFEDE4D8) : colors.bg,
@@ -783,10 +1136,14 @@ class _ChatPageState extends State<ChatPage> {
               visualDensity: VisualDensity.compact,
             ),
             const SizedBox(width: 2),
-            // 更多（+）：图片/文件等扩展入口占位
+            // 更多（+）：图片/视频/文件等扩展入口
             IconButton(
-              onPressed: () {}, // TODO: 扩展面板（图片/文件/名片等）
-              icon: Icon(Icons.add_circle_outline, size: 28, color: colors.text),
+              onPressed: _toggleMorePanel,
+              icon: Icon(
+                Icons.add_circle_outline,
+                size: 28,
+                color: _morePanelOpen ? AppColors.lime : colors.text,
+              ),
               visualDensity: VisualDensity.compact,
             ),
           ],
@@ -814,7 +1171,89 @@ class _ChatPageState extends State<ChatPage> {
   /// 切换表情面板展开/收起（展开时收起键盘，输入框保持在面板上方）。
   void _toggleFacePanel() {
     FocusScope.of(context).unfocus();
-    setState(() => _facePanelOpen = !_facePanelOpen);
+    setState(() {
+      _morePanelOpen = false;
+      _facePanelOpen = !_facePanelOpen;
+    });
+  }
+
+  /// 更多（+）面板：照片/拍摄/视频/文件 四宫格。
+  Widget _buildMorePanel(ThemeColors colors) {
+    final isLight = Theme.of(context).brightness == Brightness.light;
+    final panelColor =
+        isLight ? const Color(0xFFEDE4D8) : colors.bg;
+    final height = MediaQuery.of(context).size.height * 0.32;
+    return Container(
+      height: height,
+      color: panelColor,
+      child: SafeArea(
+        top: false,
+        child: GridView.count(
+          crossAxisCount: 4,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+          mainAxisSpacing: 16,
+          crossAxisSpacing: 16,
+          childAspectRatio: 0.85,
+          physics: const NeverScrollableScrollPhysics(),
+          children: [
+            _buildMoreItem(
+              icon: Icons.photo_library_outlined,
+              label: '照片',
+              color: const Color(0xFFFF7A45),
+              onTap: () => _handleSendImage(ImageSource.gallery),
+            ),
+            _buildMoreItem(
+              icon: Icons.photo_camera_outlined,
+              label: '拍摄',
+              color: const Color(0xFF34C759),
+              onTap: () => _handleSendImage(ImageSource.camera),
+            ),
+            _buildMoreItem(
+              icon: Icons.videocam_outlined,
+              label: '视频',
+              color: const Color(0xFF5AC8FA),
+              onTap: _handleSendVideo,
+            ),
+            _buildMoreItem(
+              icon: Icons.insert_drive_file_outlined,
+              label: '文件',
+              color: const Color(0xFFAF52DE),
+              onTap: _handleSendFile,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMoreItem({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Icon(icon, size: 28, color: color),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            label,
+            style: TextStyle(fontSize: 12, color: context.colors.text),
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -905,7 +1344,7 @@ class _MessageItem extends StatelessWidget {
       );
     }
 
-    // 气泡内容按消息类型分发：语音条 / 表情大图 / 文本
+    // 气泡内容按消息类型分发：语音条 / 表情大图 / 图片 / 视频 / 文件 / 文本
     final Widget content;
     if (message.type == ChatMsgType.voice && message.voicePayload != null) {
       content = _VoiceBubbleBody(
@@ -919,6 +1358,24 @@ class _MessageItem extends StatelessWidget {
       content = _FaceBubbleBody(
         payload: message.facePayload!,
         loading: sending,
+      );
+    } else if (message.type == ChatMsgType.image &&
+        message.imagePayload != null) {
+      content = _ImageBubbleBody(
+        payload: message.imagePayload!,
+        progress: message.progress,
+      );
+    } else if (message.type == ChatMsgType.video &&
+        message.videoPayload != null) {
+      content = _VideoBubbleBody(
+        payload: message.videoPayload!,
+        progress: message.progress,
+      );
+    } else if (message.type == ChatMsgType.file &&
+        message.filePayload != null) {
+      content = _FileBubbleBody(
+        payload: message.filePayload!,
+        progress: message.progress,
       );
     } else {
       content = Text(
@@ -937,9 +1394,11 @@ class _MessageItem extends StatelessWidget {
       onLongPress: message.operable ? () => _showActions(context) : null,
       child: Container(
         constraints: const BoxConstraints(maxWidth: 260),
-        padding: message.type == ChatMsgType.face
+        padding: (message.type == ChatMsgType.face ||
+                message.type == ChatMsgType.image ||
+                message.type == ChatMsgType.video)
             ? EdgeInsets
-                  .zero // 表情大图不加内边距
+                  .zero // 表情/图片/视频大图不加内边距
             : const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
         decoration: BoxDecoration(
           color: isSelf ? AppColors.lime : colors.card,
@@ -1156,4 +1615,227 @@ class _FaceBubbleBody extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 判断是否为本地文件路径（上传期间 url 为本地路径，用 Image.file 预览）。
+bool _isLocalPath(String url) =>
+    url.startsWith('/') ||
+    url.startsWith('file://') ||
+    !url.startsWith('http');
+
+/// 图片气泡体：等比显示（最大边 ~200），本地路径用 Image.file，远程用 Image.network；
+/// 上传中覆盖进度条。
+class _ImageBubbleBody extends StatelessWidget {
+  final ImagePayload payload;
+  final double? progress;
+
+  const _ImageBubbleBody({required this.payload, required this.progress});
+
+  @override
+  Widget build(BuildContext context) {
+    var w = payload.width.toDouble();
+    var h = payload.height.toDouble();
+    if (w <= 0 || h <= 0) {
+      w = 200;
+      h = 200;
+    } else if (w > h) {
+      h = h * 200 / w;
+      w = 200;
+    } else {
+      w = w * 200 / h;
+      h = 200;
+    }
+    final url = normalizeFaceUrl(payload.url);
+    final img = _isLocalPath(url)
+        ? Image.file(File(url), fit: BoxFit.cover)
+        : Image.network(url, fit: BoxFit.cover, errorBuilder: (_, _, _) {
+            return Container(
+              color: context.colors.divider,
+              alignment: Alignment.center,
+              child: Text('[图片]',
+                  style: TextStyle(fontSize: 12, color: context.colors.muted)),
+            );
+          });
+    return SizedBox(
+      width: w,
+      height: h,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          ClipRRect(borderRadius: BorderRadius.circular(12), child: img),
+          if (progress != null) _buildProgressOverlay(progress!),
+        ],
+      ),
+    );
+  }
+}
+
+/// 视频气泡体：显示封面图（本地/远程）+ 播放按钮 + 时长；上传中覆盖进度条。
+class _VideoBubbleBody extends StatelessWidget {
+  final VideoPayload payload;
+  final double? progress;
+
+  const _VideoBubbleBody({required this.payload, required this.progress});
+
+  @override
+  Widget build(BuildContext context) {
+    var w = payload.width.toDouble();
+    var h = payload.height.toDouble();
+    if (w <= 0 || h <= 0) {
+      w = 200;
+      h = 150;
+    } else if (w > h) {
+      h = h * 200 / w;
+      w = 200;
+    } else {
+      w = w * 150 / h;
+      h = 150;
+    }
+    final cover = payload.coverUrl;
+    Widget coverImg;
+    if (cover.isEmpty) {
+      coverImg = Container(
+        color: Colors.black87,
+        alignment: Alignment.center,
+        child: const Icon(Icons.play_circle_fill, size: 48, color: Colors.white70),
+      );
+    } else if (_isLocalPath(cover)) {
+      coverImg = Image.file(File(cover), fit: BoxFit.cover);
+    } else {
+      coverImg = Image.network(normalizeFaceUrl(cover), fit: BoxFit.cover,
+          errorBuilder: (_, _, _) {
+        return Container(
+          color: Colors.black87,
+          alignment: Alignment.center,
+          child: const Icon(Icons.play_circle_fill,
+              size: 48, color: Colors.white70),
+        );
+      });
+    }
+    final dur = payload.duration;
+    final durText = dur > 0
+        ? '${dur ~/ 60}:${(dur % 60).toString().padLeft(2, '0')}'
+        : '';
+    return SizedBox(
+      width: w,
+      height: h,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          ClipRRect(borderRadius: BorderRadius.circular(12), child: coverImg),
+          const Center(
+            child: Icon(Icons.play_circle_fill, size: 44, color: Colors.white),
+          ),
+          if (durText.isNotEmpty)
+            Positioned(
+              right: 8,
+              bottom: 8,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  durText,
+                  style: const TextStyle(color: Colors.white, fontSize: 11),
+                ),
+              ),
+            ),
+          if (progress != null) _buildProgressOverlay(progress!),
+        ],
+      ),
+    );
+  }
+}
+
+/// 文件气泡体：文件图标 + 文件名 + 大小；上传中底部进度条。
+class _FileBubbleBody extends StatelessWidget {
+  final FilePayload payload;
+  final double? progress;
+
+  const _FileBubbleBody({required this.payload, required this.progress});
+
+  String get _sizeText {
+    final s = payload.size;
+    if (s <= 0) return '';
+    if (s < 1024) return '${s}B';
+    if (s < 1024 * 1024) return '${(s / 1024).toStringAsFixed(1)}KB';
+    return '${(s / 1024 / 1024).toStringAsFixed(1)}MB';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return SizedBox(
+      width: 240,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFAF52DE).withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(Icons.insert_drive_file,
+                    size: 24, color: Color(0xFFAF52DE)),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      payload.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 14,
+                          color: colors.text,
+                          fontWeight: FontWeight.w500),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      _sizeText,
+                      style: TextStyle(fontSize: 11, color: colors.muted),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          if (progress != null) ...[
+            const SizedBox(height: 10),
+            LinearProgressIndicator(
+              value: progress!.clamp(0.0, 1.0),
+              minHeight: 3,
+              backgroundColor: colors.divider,
+              valueColor:
+                  const AlwaysStoppedAnimation<Color>(AppColors.lime),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// 上传进度遮罩（图片/视频气泡覆盖在底部的进度条）。
+Widget _buildProgressOverlay(double progress) {
+  return Positioned(
+    left: 0,
+    right: 0,
+    bottom: 0,
+    child: LinearProgressIndicator(
+      value: progress.clamp(0.0, 1.0),
+      minHeight: 3,
+      backgroundColor: Colors.black26,
+      valueColor: const AlwaysStoppedAnimation<Color>(AppColors.lime),
+    ),
+  );
 }

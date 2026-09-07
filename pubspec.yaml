@@ -43,6 +43,9 @@ dependencies:
   record: ^6.2.1
   just_audio: ^0.10.6
   path_provider: ^2.1.6
+  file_picker: ^8.1.2
+  video_thumbnail: ^0.5.3
+  video_player: ^2.9.2
 
 dev_dependencies:
   flutter_test:

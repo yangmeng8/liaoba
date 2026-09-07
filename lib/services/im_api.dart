@@ -271,12 +271,14 @@ class ImApi {
 
   // ==================== 文件上传 ====================
 
-  /// 上传文件到基础设施文件服务（语音/表情等）。
-  /// [directory] 业务目录，如 im/voice、im/face。返回文件 URL。
+  /// 上传文件到基础设施文件服务（语音/表情/图片/视频/文件等）。
+  /// [directory] 业务目录，如 im/voice、im/face、im/message、im/file。
+  /// 返回文件 URL；[onSendProgress] 回调上传进度（已发送字节数, 总字节数）。
   static Future<String> uploadFile({
     required String filePath,
     required String directory,
     String? fileName,
+    void Function(int sent, int total)? onSendProgress,
   }) async {
     final form = FormData.fromMap({
       'directory': directory,
@@ -285,6 +287,7 @@ class ImApi {
     final resp = await ApiClient.dio.post(
       '/admin-api/infra/file/upload',
       data: form,
+      onSendProgress: onSendProgress,
     );
     return ApiClient.unwrap(resp).toString();
   }

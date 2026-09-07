@@ -14,8 +14,17 @@ class ChatMsgType {
   /// 文本消息。
   static const int text = 101;
 
+  /// 图片消息：content = {"url","width","height","size"}。
+  static const int image = 102;
+
   /// 语音消息：content = {"url","duration","size"}。
   static const int voice = 103;
+
+  /// 视频消息：content = {"url","coverUrl","duration","width","height","size"}。
+  static const int video = 104;
+
+  /// 文件消息：content = {"url","name","size","type"}。
+  static const int file = 105;
 
   /// 图片表情消息：content = {"url","name","width","height"}。
   static const int face = 115;
@@ -37,6 +46,101 @@ class VoicePayload {
   );
 
   Map<String, dynamic> toJson() => {'url': url, 'duration': duration};
+}
+
+/// 图片消息 content 结构。
+class ImagePayload {
+  final String url;
+  final int width;
+  final int height;
+  final int size;
+
+  const ImagePayload({
+    required this.url,
+    this.width = 0,
+    this.height = 0,
+    this.size = 0,
+  });
+
+  factory ImagePayload.fromJson(Map<String, dynamic> json) => ImagePayload(
+    url: asString(json['url']),
+    width: asInt(json['width']),
+    height: asInt(json['height']),
+    size: asInt(json['size']),
+  );
+
+  Map<String, dynamic> toJson() => {
+    'url': url,
+    'width': width,
+    'height': height,
+    'size': size,
+  };
+}
+
+/// 视频消息 content 结构。
+class VideoPayload {
+  final String url;
+  final String coverUrl;
+  final int duration;
+  final int width;
+  final int height;
+  final int size;
+
+  const VideoPayload({
+    required this.url,
+    this.coverUrl = '',
+    this.duration = 0,
+    this.width = 0,
+    this.height = 0,
+    this.size = 0,
+  });
+
+  factory VideoPayload.fromJson(Map<String, dynamic> json) => VideoPayload(
+    url: asString(json['url']),
+    coverUrl: asString(json['coverUrl']),
+    duration: asInt(json['duration']),
+    width: asInt(json['width']),
+    height: asInt(json['height']),
+    size: asInt(json['size']),
+  );
+
+  Map<String, dynamic> toJson() => {
+    'url': url,
+    'coverUrl': coverUrl,
+    'duration': duration,
+    'width': width,
+    'height': height,
+    'size': size,
+  };
+}
+
+/// 文件消息 content 结构。
+class FilePayload {
+  final String url;
+  final String name;
+  final int size;
+  final String type;
+
+  const FilePayload({
+    required this.url,
+    required this.name,
+    this.size = 0,
+    this.type = '',
+  });
+
+  factory FilePayload.fromJson(Map<String, dynamic> json) => FilePayload(
+    url: asString(json['url']),
+    name: asString(json['name']),
+    size: asInt(json['size']),
+    type: asString(json['type']),
+  );
+
+  Map<String, dynamic> toJson() => {
+    'url': url,
+    'name': name,
+    'size': size,
+    'type': type,
+  };
 }
 
 /// 图片表情消息 content 结构。
@@ -91,6 +195,9 @@ class ChatMessage {
   /// 本地发送状态（服务端消息恒为 sent）。
   final ChatMessageStatus status;
 
+  /// 上传进度（0.0~1.0，null 表示无进度跟踪或已完成）。
+  final double? progress;
+
   /// 是否自己发送（决定气泡左右方向）。
   final bool isSelf;
 
@@ -102,6 +209,7 @@ class ChatMessage {
     this.id,
     this.sendTime,
     this.status = ChatMessageStatus.sent,
+    this.progress,
     required this.isSelf,
   });
 
@@ -180,6 +288,51 @@ class ChatMessage {
     isSelf: true,
   );
 
+  /// 本地图片占位（url 先放本地路径，上传期间直接预览）。
+  factory ChatMessage.localImage({
+    required String clientMessageId,
+    required ImagePayload payload,
+  }) => ChatMessage(
+    clientMessageId: clientMessageId,
+    senderId: AuthManager.instance.userId ?? 0,
+    type: ChatMsgType.image,
+    content: jsonEncode(payload.toJson()),
+    sendTime: DateTime.now(),
+    status: ChatMessageStatus.sending,
+    progress: 0.0,
+    isSelf: true,
+  );
+
+  /// 本地视频占位（url 先放本地路径，上传期间显示封面预览）。
+  factory ChatMessage.localVideo({
+    required String clientMessageId,
+    required VideoPayload payload,
+  }) => ChatMessage(
+    clientMessageId: clientMessageId,
+    senderId: AuthManager.instance.userId ?? 0,
+    type: ChatMsgType.video,
+    content: jsonEncode(payload.toJson()),
+    sendTime: DateTime.now(),
+    status: ChatMessageStatus.sending,
+    progress: 0.0,
+    isSelf: true,
+  );
+
+  /// 本地文件占位（url 先放本地路径）。
+  factory ChatMessage.localFile({
+    required String clientMessageId,
+    required FilePayload payload,
+  }) => ChatMessage(
+    clientMessageId: clientMessageId,
+    senderId: AuthManager.instance.userId ?? 0,
+    type: ChatMsgType.file,
+    content: jsonEncode(payload.toJson()),
+    sendTime: DateTime.now(),
+    status: ChatMessageStatus.sending,
+    progress: 0.0,
+    isSelf: true,
+  );
+
   /// 更新本地状态（占位 → sent/failed）。
   ChatMessage withStatus(ChatMessageStatus s) => ChatMessage(
     id: id,
@@ -189,6 +342,33 @@ class ChatMessage {
     content: content,
     sendTime: sendTime,
     status: s,
+    progress: progress,
+    isSelf: isSelf,
+  );
+
+  /// 替换 content（上传成功后本地路径 → 远程 URL）。
+  ChatMessage withContent(String newContent) => ChatMessage(
+    id: id,
+    clientMessageId: clientMessageId,
+    senderId: senderId,
+    type: type,
+    content: newContent,
+    sendTime: sendTime,
+    status: status,
+    progress: progress,
+    isSelf: isSelf,
+  );
+
+  /// 更新上传进度。
+  ChatMessage withProgress(double? p) => ChatMessage(
+    id: id,
+    clientMessageId: clientMessageId,
+    senderId: senderId,
+    type: type,
+    content: content,
+    sendTime: sendTime,
+    status: status,
+    progress: p,
     isSelf: isSelf,
   );
 
@@ -220,6 +400,27 @@ class ChatMessage {
             : null)
       : null;
 
+  /// 图片消息 payload（非图片消息返回 null）。
+  ImagePayload? get imagePayload => type == ChatMsgType.image
+      ? (contentMap['url'] != null && contentMap['url'].toString().isNotEmpty
+            ? ImagePayload.fromJson(contentMap)
+            : null)
+      : null;
+
+  /// 视频消息 payload（非视频消息返回 null）。
+  VideoPayload? get videoPayload => type == ChatMsgType.video
+      ? (contentMap['url'] != null && contentMap['url'].toString().isNotEmpty
+            ? VideoPayload.fromJson(contentMap)
+            : null)
+      : null;
+
+  /// 文件消息 payload（非文件消息返回 null）。
+  FilePayload? get filePayload => type == ChatMsgType.file
+      ? (contentMap['url'] != null && contentMap['url'].toString().isNotEmpty
+            ? FilePayload.fromJson(contentMap)
+            : null)
+      : null;
+
   /// 是否可长按操作（文本消息 + 已被服务端确认）。
   bool get operable =>
       isSelf && type == ChatMsgType.text && status == ChatMessageStatus.sent;
@@ -231,6 +432,12 @@ class ChatMessage {
         return extractTextContent(content);
       case ChatMsgType.voice:
         return '[语音]';
+      case ChatMsgType.image:
+        return '[图片]';
+      case ChatMsgType.video:
+        return '[视频]';
+      case ChatMsgType.file:
+        return '[文件]';
       case ChatMsgType.face:
         return '[表情]';
       case ChatMsgType.friendAdded:
@@ -246,6 +453,9 @@ class ChatMessage {
       !isSelf &&
       type != ChatMsgType.text &&
       type != ChatMsgType.voice &&
+      type != ChatMsgType.image &&
+      type != ChatMsgType.video &&
+      type != ChatMsgType.file &&
       type != ChatMsgType.face &&
       status == ChatMessageStatus.sent &&
       senderId != 0; // 频道素材仍走气泡
