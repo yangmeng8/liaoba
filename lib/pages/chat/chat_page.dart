@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -7,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:video_player/video_player.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
 
@@ -91,6 +93,13 @@ class _ChatPageState extends State<ChatPage> {
   /// 语音播放器（会话内单实例，单条播放）。
   final AudioPlayer _audioPlayer = AudioPlayer();
   String? _playingVoiceKey;
+  String? _loadingVoiceKey; // 语音下载/加载中的消息（气泡显示转圈）
+
+  /// 语音本地缓存：远程 url → 本地文件路径（.webm 等需下载重命名的场景）。
+  /// 语音气泡渲染时后台预热，点击时命中缓存即秒播。
+  final Map<String, String> _voiceLocalCache = {};
+  final Map<String, Future<String>> _voiceResolving = {}; // 并发下载去重
+  HttpClient? _voiceDlClient; // 复用连接池：同域名 TLS 握手只做一次
 
   /// 频道消息全量缓存（频道无 list 接口，读 pull 结果内存分页）。
   List<ChatMessage>? _channelAll;
@@ -136,6 +145,7 @@ class _ChatPageState extends State<ChatPage> {
     _inputCtrl.dispose();
     _inputFocus.dispose();
     _audioPlayer.dispose();
+    _voiceDlClient?.close(force: true);
     // 已读上报后让会话列表未读数归零（静默，失败忽略）
     if (_lastReportedReadId > 0) {
       ConversationStore.instance.load().catchError((Object _) {});
@@ -719,23 +729,97 @@ class _ChatPageState extends State<ChatPage> {
       if (mounted) setState(() => _playingVoiceKey = null);
       return;
     }
+    if (_loadingVoiceKey == key) return; // 下载/加载中，忽略重复点击
     try {
+      if (mounted) setState(() => _loadingVoiceKey = key);
       await _audioPlayer.stop();
-      await _audioPlayer.setUrl(url);
+      // iOS AVPlayer 按 URL 扩展名识别格式：H5 上传的语音扩展名可能为 .webm
+      // 但内容实为 MP4/AAC，直接 setUrl 会被拒 → 下载嗅探魔数重命名后再播
+      final playUrl = await _resolvePlayableUrl(url);
+      if (playUrl.startsWith('http')) {
+        await _audioPlayer.setUrl(playUrl);
+      } else {
+        await _audioPlayer.setFilePath(playUrl);
+      }
       _audioPlayer.playerStateStream.listen((state) {
         if ((state.processingState == ProcessingState.completed) && mounted) {
           setState(() => _playingVoiceKey = null);
         }
       });
-      if (mounted) setState(() => _playingVoiceKey = key);
+      if (mounted) {
+        setState(() {
+          _loadingVoiceKey = null;
+          _playingVoiceKey = key;
+        });
+      }
       await _audioPlayer.play();
     } catch (_) {
       if (mounted) {
-        setState(() => _playingVoiceKey = null);
+        setState(() {
+          _loadingVoiceKey = null;
+          _playingVoiceKey = null;
+        });
         ScaffoldMessenger.of(context)
           ..hideCurrentSnackBar()
           ..showSnackBar(const SnackBar(content: Text('语音播放失败')));
       }
+    }
+  }
+
+  /// 预热语音缓存：语音气泡渲染时后台调用（去重），用户点击时即取即用。
+  void _prefetchVoice(String url) {
+    _resolvePlayableUrl(url).then((_) {}, onError: (_) {});
+  }
+
+  /// 解析出可直接交给播放器的地址（带缓存/去重）：
+  /// - 已知可播扩展（m4a/aac/mp3/wav/mp4/flac）→ 原样返回（流式播放）
+  /// - 可疑扩展（H5 上传的 .webm 等，内容实为 MP4/AAC）→ 下载到本地，
+  ///   嗅探 ftyp 魔数后重命名为 .m4a 再播（iOS AVPlayer 按 URL 扩展名识别格式，
+  ///   不认 .webm）。
+  /// 命中 [_voiceLocalCache] 直接返回；并发请求同一 URL 共享同一个 Future；
+  /// 共享 HttpClient 连接池，同域名后续下载免 TLS 握手。
+  Future<String> _resolvePlayableUrl(String url) {
+    final cached = _voiceLocalCache[url];
+    if (cached != null) return Future.value(cached);
+    // 整体超时：OSS 偶发挂起时不让用户无限等待（超时走播放失败提示）
+    return _voiceResolving[url] ??= _downloadVoiceToLocal(url)
+        .timeout(const Duration(seconds: 15));
+  }
+
+  Future<String> _downloadVoiceToLocal(String url) async {
+    try {
+      final pathOnly = url.toLowerCase().split('#').first.split('?').first;
+      const supportedExts = ['.m4a', '.aac', '.mp3', '.wav', '.mp4', '.flac'];
+      if (supportedExts.any(pathOnly.endsWith)) return url;
+
+      final client = _voiceDlClient ??= HttpClient()
+        ..connectionTimeout = const Duration(seconds: 10);
+      final req = await client.getUrl(Uri.parse(url));
+      final resp = await req.close();
+      final builder = BytesBuilder(copy: false);
+      await for (final chunk in resp) {
+        builder.add(chunk);
+      }
+      final bytes = builder.toBytes();
+
+      // ftyp box（偏移 4~7 = 'f','t','y','p'）→ ISO-BMFF 容器，重命名为 .m4a
+      final isMp4 = bytes.length >= 8 &&
+          bytes[4] == 0x66 &&
+          bytes[5] == 0x74 &&
+          bytes[6] == 0x79 &&
+          bytes[7] == 0x70;
+      final ext = isMp4 ? '.m4a' : '.webm';
+
+      final tmpDir = await getTemporaryDirectory();
+      final cacheName = url.replaceAll(RegExp(r'[^A-Za-z0-9]'), '');
+      final file = File('${tmpDir.path}/voiceplay_$cacheName$ext');
+      if (!await file.exists()) {
+        await file.writeAsBytes(bytes);
+      }
+      _voiceLocalCache[url] = file.path;
+      return file.path;
+    } finally {
+      _voiceResolving.remove(url); // 失败允许下次重试
     }
   }
 
@@ -1050,12 +1134,14 @@ class _ChatPageState extends State<ChatPage> {
           showReadState: _isPrivate,
           peerMaxReadId: _peerMaxReadId,
           playingVoiceKey: _playingVoiceKey,
+          loadingVoiceKey: _loadingVoiceKey,
           onPlayVoice: (m) {
             final url = m.voicePayload?.url;
             if (url != null && url.isNotEmpty) {
               _togglePlayVoice(m, normalizeFaceUrl(url));
             }
           },
+          onPrefetchVoice: _prefetchVoice,
           onRetry: () => _retryMessage(message),
           onRecall: () => _recall(message),
         );
@@ -1269,8 +1355,14 @@ class _MessageItem extends StatelessWidget {
   /// 当前正在播放的语音消息 key（null=无播放）。
   final String? playingVoiceKey;
 
+  /// 正在下载/加载中的语音消息 key（气泡显示转圈）。
+  final String? loadingVoiceKey;
+
   /// 点击语音气泡（播放/停止）。
   final ValueChanged<ChatMessage> onPlayVoice;
+
+  /// 预热语音缓存（气泡渲染时后台调用，内部去重）。
+  final ValueChanged<String> onPrefetchVoice;
   final VoidCallback onRetry;
   final VoidCallback onRecall;
 
@@ -1280,7 +1372,9 @@ class _MessageItem extends StatelessWidget {
     required this.showReadState,
     required this.peerMaxReadId,
     required this.playingVoiceKey,
+    required this.loadingVoiceKey,
     required this.onPlayVoice,
+    required this.onPrefetchVoice,
     required this.onRetry,
     required this.onRecall,
   });
@@ -1347,9 +1441,13 @@ class _MessageItem extends StatelessWidget {
     // 气泡内容按消息类型分发：语音条 / 表情大图 / 图片 / 视频 / 文件 / 文本
     final Widget content;
     if (message.type == ChatMsgType.voice && message.voicePayload != null) {
+      // 渲染即后台预热缓存（内部去重），点击时命中即秒播
+      final vUrl = normalizeFaceUrl(message.voicePayload!.url);
+      if (vUrl.isNotEmpty) onPrefetchVoice(vUrl);
       content = _VoiceBubbleBody(
         payload: message.voicePayload!,
         playing: playingVoiceKey == message.key,
+        loading: loadingVoiceKey == message.key,
         selfColor: isSelf,
         onTap: () => onPlayVoice(message),
       );
@@ -1388,10 +1486,16 @@ class _MessageItem extends StatelessWidget {
       );
     }
 
+    final isVoice = message.type == ChatMsgType.voice;
     final bubble = GestureDetector(
-      // 失败点击重试；正常消息长按弹菜单
-      onTap: failed ? onRetry : null,
+      // 失败点击重试；语音消息整条气泡点击播放；正常消息长按弹菜单
+      onTap: failed
+          ? onRetry
+          : (isVoice ? () => onPlayVoice(message) : null),
       onLongPress: message.operable ? () => _showActions(context) : null,
+      // 语音条整条气泡（含内边距空白）都要可点；其余类型保持默认，
+      // 避免吞掉页面级点击（点空白收键盘）
+      behavior: isVoice ? HitTestBehavior.opaque : HitTestBehavior.deferToChild,
       child: Container(
         constraints: const BoxConstraints(maxWidth: 260),
         padding: (message.type == ChatMsgType.face ||
@@ -1505,15 +1609,18 @@ class _MessageItem extends StatelessWidget {
 
 /// 语音气泡体：宽度按时长线性映射（80 + duration×10，封顶 220），
 /// 喇叭图标 + 时长文本；点击播放/停止（对应 H5 message-bubble 语音条）。
+/// [loading]：语音下载/加载中，图标位显示转圈。
 class _VoiceBubbleBody extends StatelessWidget {
   final VoicePayload payload;
   final bool playing;
+  final bool loading;
   final bool selfColor;
   final VoidCallback onTap;
 
   const _VoiceBubbleBody({
     required this.payload,
     required this.playing,
+    required this.loading,
     required this.selfColor,
     required this.onTap,
   });
@@ -1522,30 +1629,31 @@ class _VoiceBubbleBody extends StatelessWidget {
   Widget build(BuildContext context) {
     final width = (80 + payload.duration * 10).clamp(80, 220).toDouble();
     final fg = selfColor ? Colors.black : context.colors.text;
+    // 图标位：加载中转圈 > 播放中波形 > 默认播放三角
+    Widget iconOf(Color color) => loading
+        ? SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(strokeWidth: 2, color: color),
+          )
+        : Icon(playing ? Icons.graphic_eq : Icons.play_arrow, color: color);
     return GestureDetector(
       onTap: onTap,
+      // 整条语音条（图标/文字/之间空白）均可点，而非只有图标处响应
+      behavior: HitTestBehavior.opaque,
       child: SizedBox(
         width: width,
+        height: 26,
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             // 左侧图标（对方消息）/右侧图标（自己消息，保持喇叭朝向聊天方）
-            if (!selfColor)
-              Icon(
-                playing ? Icons.graphic_eq : Icons.play_arrow,
-                size: 22,
-                color: selfColor ? Colors.black : context.colors.muted,
-              ),
+            if (!selfColor) iconOf(context.colors.muted),
             Text(
               '${payload.duration}"',
               style: TextStyle(fontSize: 14, color: fg),
             ),
-            if (selfColor)
-              Icon(
-                playing ? Icons.graphic_eq : Icons.play_arrow,
-                size: 22,
-                color: Colors.black,
-              ),
+            if (selfColor) iconOf(Colors.black),
           ],
         ),
       ),
