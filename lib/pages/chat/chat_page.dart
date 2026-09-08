@@ -1,7 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
-import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -94,6 +94,16 @@ class _ChatPageState extends State<ChatPage> {
 
   /// 输入模式：false=键盘（文本框），true=语音（按住说话）。
   bool _voiceMode = false;
+
+  /// 回复/引用目标（输入框上方预览；发送时注入 content.quote，发送成功清除）。
+  ChatMessage? _replyTarget;
+
+  /// 多选模式：消息行点击切换选中，输入栏替换为批量操作栏。
+  bool _selectionMode = false;
+  final Set<String> _selectedKeys = {};
+
+  /// 群聊回执消息开关（发送时带 receipt，加号面板可切换）。
+  bool _receiptEnabled = true;
 
   /// 表情面板展开状态（展开在输入栏下方，输入框保持可见）。
   bool _facePanelOpen = false;
@@ -1058,7 +1068,9 @@ class _ChatPageState extends State<ChatPage> {
 
   /// 执行发送：成功用服务端消息替换占位；失败置 failed（点击气泡可重试，
   /// 复用同一 clientMessageId，服务端幂等保证不重复）。
-  Future<void> _performSend(ChatMessage local) async {
+  Future<void> _performSend(ChatMessage msg) async {
+    // 统一注入引用（含媒体最终 content；重试幂等：重复注入同目标无害）
+    final local = _applyReply(msg);
     setState(() => _sending = true);
     try {
       ChatMessage? server;
@@ -1076,6 +1088,7 @@ class _ChatPageState extends State<ChatPage> {
           groupId: widget.targetId,
           type: local.type,
           content: local.content,
+          receipt: _receiptEnabled,
         );
         server = m != null ? ChatMessage.fromGroup(m) : null;
       }
@@ -1088,6 +1101,8 @@ class _ChatPageState extends State<ChatPage> {
         if (i >= 0) {
           _messages[i] = server ?? local.withStatus(ChatMessageStatus.sent);
         }
+        // 发送成功：消费掉引用目标（H5 consumeReply 语义）
+        _replyTarget = null;
       });
       _maybeMarkRead();
     } catch (e) {
@@ -1191,6 +1206,183 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
+  // ==================== 长按菜单动作 ====================
+
+  /// 引用注入：把当前回复目标的 quote 固化进消息 content（幂等）。
+  ChatMessage _applyReply(ChatMessage local) {
+    final t = _replyTarget;
+    if (t == null || t.id == null) return local;
+    final map = Map<String, dynamic>.from(local.contentMap);
+    map['quote'] = t.buildQuote();
+    return local.withContent(jsonEncode(map));
+  }
+
+  /// 引用回复：设回复目标 → 输入框上方预览，发送时注入 quote。
+  void _quoteMessage(ChatMessage m) {
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _facePanelOpen = false;
+      _morePanelOpen = false;
+      _replyTarget = m;
+    });
+  }
+
+  /// 本地删除（纯客户端：只影响本设备，无服务端接口）。
+  /// 删光当前列表时补拉更早一页（对齐 H5 loadOlderMessagesAfterClear）。
+  Future<void> _deleteLocalMessage(ChatMessage m) async {
+    final minId = m.id;
+    setState(() => _messages.removeWhere((e) => e.key == m.key));
+    if (_messages.isEmpty && !_noMore && minId != null) {
+      await _loadOlderAfterClear(minId);
+    }
+  }
+
+  /// 删光列表后补拉（以被删消息编号为游标拉取更早一页）。
+  Future<void> _loadOlderAfterClear(int maxId) async {
+    try {
+      final List<ChatMessage> older;
+      if (_isPrivate) {
+        final list = await ImApi.getPrivateMessageList(
+          receiverId: widget.targetId,
+          limit: _pageSize,
+          maxId: maxId,
+        );
+        older = list.map(ChatMessage.fromPrivate).toList();
+      } else {
+        final list = await ImApi.getGroupMessageList(
+          groupId: widget.targetId,
+          limit: _pageSize,
+          maxId: maxId,
+        );
+        older = list.map(ChatMessage.fromGroup).toList();
+      }
+      if (!mounted) return;
+      setState(() {
+        _messages = older;
+        _noMore = older.length < _pageSize;
+      });
+    } catch (_) {
+      // 静默：补拉失败保持空列表
+    }
+  }
+
+  /// 添加到表情（图片/表情消息 → 个人收藏表情）。
+  Future<void> _addFaceFromMessage(ChatMessage m) async {
+    final img = m.imagePayload;
+    final face = m.facePayload;
+    final url = img?.url ?? face?.url ?? '';
+    if (url.isEmpty) return;
+    final width = img?.width ?? face?.width ?? 150;
+    final height = img?.height ?? face?.height ?? 150;
+    try {
+      await ImApi.createFaceUserItem(
+        url: url,
+        name: m.type == ChatMsgType.face ? (face?.name ?? '') : '',
+        width: width,
+        height: height,
+      );
+      _showSnack('已添加到表情');
+    } catch (e) {
+      _showSnack(ApiClient.errorMessage(e));
+    }
+  }
+
+  /// 转发（单条入口）：打开转发选择器。
+  void _forwardMessage(ChatMessage m) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _ForwardSheet(
+        messages: [m],
+        onDone: (ok, fail) => _showSnack(ok ? '已转发' : '$fail 个目标转发失败'),
+      ),
+    );
+  }
+
+  /// 多选模式：进入（清空旧选择）。
+  void _enterMultiSelect(ChatMessage m) {
+    setState(() {
+      _selectionMode = true;
+      _selectedKeys.clear();
+      _selectedKeys.add(m.key);
+    });
+  }
+
+  /// 多选模式：切换选中（仅正常消息）。
+  void _toggleSelected(ChatMessage m) {
+    if (!m.operable) return;
+    setState(() {
+      if (!_selectedKeys.add(m.key)) {
+        _selectedKeys.remove(m.key);
+      }
+    });
+  }
+
+  /// 退出多选模式。
+  void _exitMultiSelect() {
+    setState(() {
+      _selectionMode = false;
+      _selectedKeys.clear();
+    });
+  }
+
+  /// 多选批量转发。
+  void _forwardSelected() {
+    final selected = _messages.where((m) => _selectedKeys.contains(m.key)).toList()
+      ..sort((a, b) => (b.id ?? 0).compareTo(a.id ?? 0));
+    if (selected.isEmpty) return;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _ForwardSheet(
+        messages: selected,
+        onDone: (ok, fail) => _showSnack(ok ? '已转发' : '$fail 个目标转发失败'),
+      ),
+    );
+  }
+
+  /// 多选批量删除（纯本地）。
+  Future<void> _deleteSelected() async {
+    if (_selectedKeys.isEmpty) return;
+    final keys = Set<String>.from(_selectedKeys);
+    var minId = _messages
+        .where((m) => keys.contains(m.key))
+        .fold<int?>(null, (a, m) => a == null || (m.id ?? 0) < a ? m.id : a);
+    setState(() => _messages.removeWhere((m) => keys.contains(m.key)));
+    _exitMultiSelect();
+    if (_messages.isEmpty && !_noMore && minId != null) {
+      await _loadOlderAfterClear(minId);
+    }
+  }
+
+  /// 打开群消息回执详情（已读/未读差集）。
+  void _openReadReceipt(ChatMessage m) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _ReadReceiptSheet(
+        message: m,
+        groupId: widget.targetId,
+        members: _groupMembers,
+        // 回写 readCount/receiptStatus（下次打开不重复判定"全部已读"）
+        onReceipt: (readCount, receiptStatus) {
+          setState(() {
+            final i = _messages.indexWhere((e) => e.key == m.key);
+            if (i >= 0) {
+              _messages[i] = _messages[i].withReceipt(
+                status: receiptStatus,
+                count: readCount,
+              );
+            }
+          });
+        },
+      ),
+    );
+  }
+
   // ==================== UI ====================
 
   void _scrollToBottom() {
@@ -1241,7 +1433,10 @@ class _ChatPageState extends State<ChatPage> {
                         ? 0
                         : MediaQuery.of(context).viewInsets.bottom,
                   ),
-                  child: _buildInputBar(colors),
+                  // 多选模式：输入栏替换为批量操作栏
+                  child: _selectionMode
+                      ? _buildMultiSelectBar(colors)
+                      : _buildInputBar(colors),
                 ),
                 // 内嵌表情面板：展开时显示在输入栏下方
                 if (_facePanelOpen)
@@ -1365,9 +1560,19 @@ class _ChatPageState extends State<ChatPage> {
           message: message,
           older: older,
           showReadState: _isPrivate,
+          showGroupReadStatus: _isGroup,
           peerMaxReadId: _peerMaxReadId,
           avatarUrl: _avatarUrlFor(message),
           avatarName: _avatarNameFor(message),
+          selectionMode: _selectionMode,
+          selected: _selectionMode && _selectedKeys.contains(message.key),
+          onToggleSelect: _toggleSelected,
+          onQuote: _quoteMessage,
+          onForward: _forwardMessage,
+          onDeleteLocal: _deleteLocalMessage,
+          onAddFace: _addFaceFromMessage,
+          onEnterMultiSelect: _enterMultiSelect,
+          onOpenReadReceipt: _openReadReceipt,
           playingVoiceKey: _playingVoiceKey,
           loadingVoiceKey: _loadingVoiceKey,
           onPlayVoice: (m) {
@@ -1385,6 +1590,99 @@ class _ChatPageState extends State<ChatPage> {
           onRecall: () => _recall(message),
         );
       },
+    );
+  }
+
+  /// 引用回复预览条（输入框上方，可取消）：
+  /// 图片/表情引用显示缩略图，其余类型显示文本摘要。
+  Widget? _buildReplyPreview(ThemeColors colors) {
+    final t = _replyTarget;
+    if (t == null) return null;
+    final mediaUrl = t.imagePayload?.url ?? t.facePayload?.url ?? '';
+    final summary = t.displayText;
+    final isLight = Theme.of(context).brightness == Brightness.light;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: isLight ? const Color(0xFFE4E0D8) : colors.card,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.format_quote, size: 14, color: colors.muted),
+          const SizedBox(width: 6),
+          if (mediaUrl.isNotEmpty) ...[
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: Image.network(
+                normalizeFaceUrl(mediaUrl),
+                width: 36,
+                height: 36,
+                fit: BoxFit.cover,
+                errorBuilder: (_, _, _) => SizedBox(
+                  width: 36,
+                  height: 36,
+                  child: Icon(
+                    Icons.broken_image_outlined,
+                    size: 20,
+                    color: colors.muted,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
+          ],
+          Expanded(
+            child: Text(
+              summary,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 12, color: colors.muted),
+            ),
+          ),
+          GestureDetector(
+            onTap: () => setState(() => _replyTarget = null),
+            child: Icon(Icons.close, size: 16, color: colors.muted),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 多选模式批量操作栏（替代输入栏）：已选数量 + 转发/删除/取消。
+  Widget _buildMultiSelectBar(ThemeColors colors) {
+    return SafeArea(
+      top: false,
+      child: Container(
+        color: colors.surface,
+        padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                '已选 ${_selectedKeys.length} 条',
+                style: TextStyle(fontSize: 14, color: colors.text),
+              ),
+            ),
+            TextButton(
+              onPressed: _selectedKeys.isEmpty ? null : _forwardSelected,
+              child: const Text('转发', style: TextStyle(fontSize: 14)),
+            ),
+            TextButton(
+              onPressed: _selectedKeys.isEmpty ? null : _deleteSelected,
+              child: const Text(
+                '删除',
+                style: TextStyle(fontSize: 14, color: Color(0xFFFA5151)),
+              ),
+            ),
+            TextButton(
+              onPressed: _exitMultiSelect,
+              child: const Text('取消', style: TextStyle(fontSize: 14)),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -1415,7 +1713,12 @@ class _ChatPageState extends State<ChatPage> {
         color: isLight ? const Color(0xFFEDE4D8) : colors.bg,
         // 底部 10 + SafeArea：保证 home indicator 区域不贴边
         padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
-        child: Row(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // 引用回复预览条（设了回复目标时显示）
+            ?_buildReplyPreview(colors),
+            Row(
           children: [
             // 语音/键盘模式切换
             _buildModeToggle(colors),
@@ -1470,6 +1773,8 @@ class _ChatPageState extends State<ChatPage> {
                 color: _morePanelOpen ? AppColors.lime : colors.text,
               ),
               visualDensity: VisualDensity.compact,
+            ),
+          ],
             ),
           ],
         ),
@@ -1545,6 +1850,18 @@ class _ChatPageState extends State<ChatPage> {
               color: const Color(0xFFAF52DE),
               onTap: _handleSendFile,
             ),
+            // 回执消息开关（仅群聊：发送时带 receipt，接收端显示已读回执）
+            if (_isGroup)
+              _buildMoreItem(
+                icon: _receiptEnabled
+                    ? Icons.task_alt
+                    : Icons.radio_button_unchecked,
+                label: _receiptEnabled ? '回执消息·开' : '回执消息·关',
+                color: _receiptEnabled
+                    ? const Color(0xFF34C759)
+                    : context.colors.muted,
+                onTap: () => setState(() => _receiptEnabled = !_receiptEnabled),
+              ),
           ],
         ),
       ),
@@ -1595,7 +1912,37 @@ class _MessageItem extends StatelessWidget {
 
   /// 是否显示已读小字（私聊）。
   final bool showReadState;
+
+  /// 是否显示群回执小字（群聊自己消息，「N 人已读」点击开详情）。
+  final bool showGroupReadStatus;
   final int peerMaxReadId;
+
+  /// 多选模式：整条消息点击切换选中，头像位置显示勾选框。
+  final bool selectionMode;
+
+  /// 多选模式：本条是否已选中。
+  final bool selected;
+
+  /// 多选模式：点击消息切换选中。
+  final ValueChanged<ChatMessage> onToggleSelect;
+
+  /// 引用回复（设回复目标）。
+  final ValueChanged<ChatMessage> onQuote;
+
+  /// 转发（打开转发选择器）。
+  final ValueChanged<ChatMessage> onForward;
+
+  /// 本地删除（纯本设备）。
+  final ValueChanged<ChatMessage> onDeleteLocal;
+
+  /// 添加到表情（图片/表情消息 → 个人收藏）。
+  final ValueChanged<ChatMessage> onAddFace;
+
+  /// 进入多选模式。
+  final ValueChanged<ChatMessage> onEnterMultiSelect;
+
+  /// 打开群消息回执详情。
+  final ValueChanged<ChatMessage> onOpenReadReceipt;
 
   /// 当前正在播放的语音消息 key（null=无播放）。
   final String? playingVoiceKey;
@@ -1629,7 +1976,17 @@ class _MessageItem extends StatelessWidget {
     required this.avatarUrl,
     required this.avatarName,
     required this.showReadState,
+    required this.showGroupReadStatus,
     required this.peerMaxReadId,
+    required this.selectionMode,
+    required this.selected,
+    required this.onToggleSelect,
+    required this.onQuote,
+    required this.onForward,
+    required this.onDeleteLocal,
+    required this.onAddFace,
+    required this.onEnterMultiSelect,
+    required this.onOpenReadReceipt,
     required this.playingVoiceKey,
     required this.loadingVoiceKey,
     required this.onPlayVoice,
@@ -1702,7 +2059,7 @@ class _MessageItem extends StatelessWidget {
     }
 
     // 气泡内容按消息类型分发：语音条 / 表情大图 / 图片 / 视频 / 文件 / 文本
-    final Widget content;
+    Widget content;
     if (message.type == ChatMsgType.voice && message.voicePayload != null) {
       // 渲染即后台预热缓存（内部去重），点击时命中即秒播
       final vUrl = normalizeFaceUrl(message.voicePayload!.url);
@@ -1775,12 +2132,31 @@ class _MessageItem extends StatelessWidget {
     final isPlainMedia = message.type == ChatMsgType.face ||
         message.type == ChatMsgType.image ||
         message.type == ChatMsgType.video;
+
+    // 引用块：被引用消息摘要显示在气泡内容上方（纯媒体大图除外）
+    final quote = message.quotePayload;
+    if (quote != null && !isPlainMedia) {
+      content = Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _QuoteBlock(quote: quote),
+          const SizedBox(height: 4),
+          content,
+        ],
+      );
+    }
+
     final bubble = GestureDetector(
-      // 失败点击重试；语音消息整条气泡点击播放；正常消息长按弹菜单
+      // 多选模式整条点击切换选中；失败点击重试；语音整条点击播放
       onTap: failed
           ? onRetry
-          : (isVoice ? () => onPlayVoice(message) : null),
-      onLongPress: message.operable ? () => _showActions(context) : null,
+          : (selectionMode
+                ? () => onToggleSelect(message)
+                : (isVoice ? () => onPlayVoice(message) : null)),
+      onLongPress: message.operable && !selectionMode
+          ? () => _showActions(context)
+          : null,
       // 语音条整条气泡（含内边距空白）都要可点；其余类型保持默认，
       // 避免吞掉页面级点击（点空白收键盘）
       behavior: isVoice ? HitTestBehavior.opaque : HitTestBehavior.deferToChild,
@@ -1807,8 +2183,49 @@ class _MessageItem extends StatelessWidget {
       ),
     );
 
-    // 头像贴行两侧（微信风格：自己头像在右、对方在左，与气泡顶部对齐）
-    final avatar = ImAvatar(src: avatarUrl, name: avatarName, size: 40);
+    // 群回执小字（自己发的回执消息：全部已读 / N 人已读 / 未读，点击开详情）
+    Widget? groupReceipt;
+    if (showGroupReadStatus &&
+        isSelf &&
+        message.id != null &&
+        message.receiptStatus != 0) {
+      final label = message.receiptStatus == 2
+          ? '全部已读'
+          : (message.readCount > 0 ? '${message.readCount} 人已读' : '未读');
+      groupReceipt = GestureDetector(
+        onTap: () => onOpenReadReceipt(message),
+        child: Padding(
+          padding: const EdgeInsets.only(top: 2, right: 4),
+          child: Text(
+            label,
+            style: TextStyle(fontSize: 10, color: colors.muted),
+          ),
+        ),
+      );
+    }
+
+    // 头像贴行两侧（微信风格：自己头像在右、对方在左，与气泡顶部对齐）。
+    // 多选模式：头像位置换成勾选框（对齐 H5「头像变勾选框」）。
+    final avatar = selectionMode
+        ? GestureDetector(
+            onTap: () => onToggleSelect(message),
+            child: Container(
+              width: 40,
+              height: 40,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: selected ? AppColors.lime : null,
+                border: Border.all(
+                  color: selected ? AppColors.lime : colors.muted,
+                ),
+              ),
+              child: selected
+                  ? const Icon(Icons.check, size: 24, color: Colors.black)
+                  : null,
+            ),
+          )
+        : ImAvatar(src: avatarUrl, name: avatarName, size: 40);
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
@@ -1831,7 +2248,7 @@ class _MessageItem extends StatelessWidget {
                 crossAxisAlignment: isSelf
                     ? CrossAxisAlignment.end
                     : CrossAxisAlignment.start,
-                children: [bubble, ?readState],
+                children: [bubble, ?readState, ?groupReceipt],
               ),
             ),
           ),
@@ -1874,8 +2291,70 @@ class _MessageItem extends StatelessWidget {
     return const [];
   }
 
+  /// 长按菜单（对齐 H5 message-action-sheet：菜单项逐条动态计算，
+  /// 纯函数判断——引用/复制/转发/撤回/复制文件链接/加表情/多选/删除）。
   void _showActions(BuildContext context) {
     HapticFeedback.lightImpact();
+
+    final recallable = message.canRecall();
+    final forwardable = message.operable; // 有 id + 正常类型 + 已确认
+    final isFile = message.type == ChatMsgType.file;
+    final isMediaFace = message.type == ChatMsgType.image ||
+        message.type == ChatMsgType.face;
+
+    // 删除仅对「不可撤回」的消息显示（对齐 H5：自己发的过期消息 / 别人发的）
+    final deletable = !recallable;
+
+    // 菜单项（文本色/点击回调）
+    final items = <(IconData, String, Color?, VoidCallback)>[
+      if (forwardable)
+        (Icons.format_quote, '引用', null, () => onQuote(message)),
+      if (message.type == ChatMsgType.text)
+        (
+          Icons.content_copy,
+          '复制',
+          null,
+          () => Clipboard.setData(
+            ClipboardData(text: message.displayText),
+          ),
+        ),
+      if (forwardable)
+        (Icons.shortcut_outlined, '转发', null, () => onForward(message)),
+      if (recallable)
+        (Icons.undo, '撤回', null, () => onRecall()),
+      if (isFile)
+        (
+          Icons.link,
+          '复制文件链接',
+          null,
+          () {
+            final url = message.filePayload?.url ?? '';
+            if (url.isEmpty) return;
+            Clipboard.setData(ClipboardData(text: normalizeFaceUrl(url)));
+            ScaffoldMessenger.of(context)
+              ..hideCurrentSnackBar()
+              ..showSnackBar(const SnackBar(content: Text('链接已复制')));
+          },
+        ),
+      if (isMediaFace)
+        (
+          Icons.emoji_emotions_outlined,
+          '添加到表情',
+          null,
+          () => onAddFace(message),
+        ),
+      if (forwardable)
+        (
+          Icons.checklist,
+          '多选',
+          null,
+          () => onEnterMultiSelect(message),
+        ),
+      if (deletable)
+        (Icons.delete_outline, '删除', Colors.red, () => onDeleteLocal(message)),
+    ];
+
+    if (items.isEmpty) return;
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: context.colors.card,
@@ -1886,22 +2365,22 @@ class _MessageItem extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            ListTile(
-              leading: const Icon(Icons.content_copy, size: 22),
-              title: const Text('复制', style: TextStyle(fontSize: 15)),
-              onTap: () {
-                Clipboard.setData(ClipboardData(text: message.displayText));
-                Navigator.pop(sheetCtx);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.undo, size: 22),
-              title: const Text('撤回', style: TextStyle(fontSize: 15)),
-              onTap: () {
-                Navigator.pop(sheetCtx);
-                onRecall();
-              },
-            ),
+            for (final (icon, label, color, action) in items)
+              ListTile(
+                leading: Icon(
+                  icon,
+                  size: 22,
+                  color: color ?? context.colors.text,
+                ),
+                title: Text(
+                  label,
+                  style: TextStyle(fontSize: 15, color: color),
+                ),
+                onTap: () {
+                  Navigator.pop(sheetCtx);
+                  action();
+                },
+              ),
           ],
         ),
       ),
@@ -2241,7 +2720,7 @@ class _FileBubbleBody extends StatelessWidget {
                 width: 40,
                 height: 40,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFAF52DE).withOpacity(0.15),
+                  color: const Color(0xFFAF52DE).withValues(alpha: 0.15),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: const Icon(Icons.insert_drive_file,
@@ -2591,6 +3070,642 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
             Text(
               '${_fmt(pos)} / ${_fmt(dur)}',
               style: const TextStyle(color: Colors.white, fontSize: 12),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 引用块（气泡内上方）：左竖线 + 被引用消息摘要（对齐 H5 quote 渲染）；
+/// 图片/表情引用显示缩略图，其余类型显示文本摘要。
+class _QuoteBlock extends StatelessWidget {
+  final QuotePayload quote;
+
+  const _QuoteBlock({required this.quote});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final mediaUrl = quote.mediaUrl;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: colors.muted.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(6),
+        border: Border(left: BorderSide(color: colors.muted, width: 2)),
+      ),
+      child: mediaUrl != null
+          ? Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: Image.network(
+                    normalizeFaceUrl(mediaUrl),
+                    width: 48,
+                    height: 48,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) => Text(
+                      quote.summary,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: colors.muted,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    quote.summary,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 12, color: colors.muted),
+                  ),
+                ),
+              ],
+            )
+          : Text(
+              quote.summary,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 12, color: colors.muted, height: 1.3),
+            ),
+    );
+  }
+}
+
+/// 转发选择器（对应 H5 message-forward-dialog + forward-picker）：
+/// 好友/群聊两个页签，支持多选目标 + 选填留言；逐条转发复用发送接口，
+/// 去掉原引用（stripQuote）避免嵌套引用；完成后回调成功/失败数。
+class _ForwardSheet extends StatefulWidget {
+  final List<ChatMessage> messages;
+
+  /// 转发完成回调（是否全部成功 / 失败目标数）。
+  final void Function(bool allOk, int failCount) onDone;
+
+  const _ForwardSheet({required this.messages, required this.onDone});
+
+  @override
+  State<_ForwardSheet> createState() => _ForwardSheetState();
+}
+
+class _ForwardSheetState extends State<_ForwardSheet> {
+  /// 转发目标（好友或群）。
+  bool _tabGroup = false; // false=好友 true=群聊
+  final List<ImFriend> _friends = [];
+  final List<ImGroup> _groups = [];
+  final Set<int> _selected = {}; // 目标编号（好友 userId / 群 groupId）
+  final _leaveCtrl = TextEditingController();
+  bool _loading = true;
+  bool _sending = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadTargets();
+  }
+
+  @override
+  void dispose() {
+    _leaveCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadTargets() async {
+    try {
+      final results = await Future.wait([
+        ImApi.getFriendList(),
+        ImApi.getGroupList(),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _friends
+          ..clear()
+          ..addAll(results[0] as List<ImFriend>);
+        _groups
+          ..clear()
+          ..addAll(
+            (results[1] as List<ImGroup>).where((g) => g.joinStatus == 0),
+          ); // joinStatus 0=在群 1=已退群（退群不可转发）
+        _loading = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  void _toggle(int id) {
+    setState(() {
+      if (!_selected.add(id)) {
+        _selected.remove(id);
+      }
+    });
+  }
+
+  /// 逐条转发到单个目标（复用发送接口；失败抛异常由外层统计）。
+  Future<void> _forwardToTarget({
+    required bool isGroup,
+    required int targetId,
+  }) async {
+    for (final m in widget.messages) {
+      if (isGroup) {
+        await ImApi.sendGroupMessage(
+          clientMessageId: generateClientMessageId(),
+          groupId: targetId,
+          type: m.type,
+          content: stripQuote(m.content),
+        );
+      } else {
+        await ImApi.sendPrivateMessage(
+          clientMessageId: generateClientMessageId(),
+          receiverId: targetId,
+          type: m.type,
+          content: stripQuote(m.content),
+        );
+      }
+    }
+    // 转发完成后再发一条文本留言（对齐 H5：留言独立成一条 TEXT 消息）
+    final leave = _leaveCtrl.text.trim();
+    if (leave.isNotEmpty) {
+      final content = jsonEncode({'content': leave});
+      if (isGroup) {
+        await ImApi.sendGroupMessage(
+          clientMessageId: generateClientMessageId(),
+          groupId: targetId,
+          type: ChatMsgType.text,
+          content: content,
+        );
+      } else {
+        await ImApi.sendPrivateMessage(
+          clientMessageId: generateClientMessageId(),
+          receiverId: targetId,
+          type: ChatMsgType.text,
+          content: content,
+        );
+      }
+    }
+  }
+
+  Future<void> _confirm() async {
+    if (_selected.isEmpty || _sending) return;
+    setState(() => _sending = true);
+    var failCount = 0;
+    for (final id in _selected) {
+      try {
+        await _forwardToTarget(isGroup: _tabGroup, targetId: id);
+      } catch (_) {
+        failCount++;
+      }
+    }
+    if (!mounted) return;
+    Navigator.of(context).pop();
+    widget.onDone(failCount == 0, failCount);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final height = MediaQuery.of(context).size.height * 0.7;
+    final preview = widget.messages.length == 1
+        ? widget.messages.first.displayText
+        : '共 ${widget.messages.length} 条消息';
+    return Container(
+      height: height,
+      decoration: BoxDecoration(
+        color: colors.card,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          children: [
+            // 标题栏
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 8, 0),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '转发给',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: colors.text,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    icon: Icon(Icons.close, color: colors.muted),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                ],
+              ),
+            ),
+            // 待转发内容预览
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              child: Text(
+                '待转发：$preview',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 12, color: colors.muted),
+              ),
+            ),
+            // 好友/群聊页签
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () => setState(() {
+                        _tabGroup = false;
+                        _selected.clear();
+                      }),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        decoration: BoxDecoration(
+                          color: !_tabGroup
+                              ? AppColors.lime
+                              : colors.muted.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        alignment: Alignment.center,
+                        child: Text(
+                          '好友',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: !_tabGroup ? Colors.black : colors.muted,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () => setState(() {
+                        _tabGroup = true;
+                        _selected.clear();
+                      }),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        decoration: BoxDecoration(
+                          color: _tabGroup
+                              ? AppColors.lime
+                              : colors.muted.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        alignment: Alignment.center,
+                        child: Text(
+                          '群聊',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: _tabGroup ? Colors.black : colors.muted,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // 目标列表
+            Expanded(
+              child: _loading
+                  ? const Center(
+                      child: CircularProgressIndicator(color: AppColors.lime),
+                    )
+                  : ListView.builder(
+                      itemCount: _tabGroup ? _groups.length : _friends.length,
+                      itemBuilder: (context, index) {
+                        final (id, name, avatar) = _tabGroup
+                            ? (
+                                _groups[index].id,
+                                _groups[index].name,
+                                _groups[index].avatar,
+                              )
+                            : (
+                                _friends[index].friendUserId,
+                                _friends[index].shownName,
+                                _friends[index].avatar,
+                              );
+                        final checked = _selected.contains(id);
+                        return ListTile(
+                          leading: ImAvatar(src: avatar, name: name, size: 40),
+                          title: Text(
+                            name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(fontSize: 15, color: colors.text),
+                          ),
+                          trailing: Icon(
+                            checked
+                                ? Icons.check_circle
+                                : Icons.radio_button_unchecked,
+                            color: checked ? AppColors.lime : colors.muted,
+                          ),
+                          onTap: () => _toggle(id),
+                        );
+                      },
+                    ),
+            ),
+            // 留言 + 转发按钮
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: _leaveCtrl,
+                    maxLength: 100,
+                    style: TextStyle(fontSize: 14, color: colors.text),
+                    decoration: InputDecoration(
+                      isDense: true,
+                      hintText: '给朋友留言（选填）',
+                      hintStyle: TextStyle(
+                        fontSize: 13,
+                        color: colors.muted,
+                      ),
+                      counterText: '',
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      filled: true,
+                      fillColor: colors.muted.withValues(alpha: 0.08),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide.none,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: AppColors.lime,
+                        foregroundColor: Colors.black,
+                        disabledBackgroundColor: colors.muted.withValues(
+                          alpha: 0.3,
+                        ),
+                      ),
+                      onPressed: (_selected.isEmpty || _sending)
+                          ? null
+                          : _confirm,
+                      child: _sending
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.black,
+                              ),
+                            )
+                          : Text(
+                              _selected.isEmpty
+                                  ? '请选择${_tabGroup ? '群聊' : '好友'}'
+                                  : '转发（${_selected.length}）',
+                              style: const TextStyle(fontSize: 15),
+                            ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 群消息回执详情弹层（对应 H5 message-read-status）：
+/// 单接口拉已读 userId 数组 + 本地群成员表做差集，一次得到
+/// 「已读/未读」两个页签；回写 readCount/receiptStatus 供气泡小字复用。
+class _ReadReceiptSheet extends StatefulWidget {
+  final ChatMessage message;
+  final int groupId;
+
+  /// 群成员索引：userId → ImGroupMember。
+  final Map<int, ImGroupMember> members;
+
+  /// 回执回写（已读人数 / 状态：2=全部已读）。
+  final void Function(int readCount, int receiptStatus) onReceipt;
+
+  const _ReadReceiptSheet({
+    required this.message,
+    required this.groupId,
+    required this.members,
+    required this.onReceipt,
+  });
+
+  @override
+  State<_ReadReceiptSheet> createState() => _ReadReceiptSheetState();
+}
+
+class _ReadReceiptSheetState extends State<_ReadReceiptSheet> {
+  bool _tabUnread = false; // false=已读 true=未读
+  bool _loading = true;
+  List<int> _readUserIds = const [];
+  bool _receiptEmitted = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadReadUsers();
+  }
+
+  Future<void> _loadReadUsers() async {
+    final id = widget.message.id;
+    if (id == null) return;
+    try {
+      final ids = await ImApi.getGroupMessageReadUserIds(
+        groupId: widget.groupId,
+        messageId: id,
+      );
+      if (!mounted) return;
+      setState(() {
+        _readUserIds = ids;
+        _loading = false;
+      });
+      // 回写回执（对齐 H5：全部已读的判定落在客户端）
+      if (!_receiptEmitted) {
+        _receiptEmitted = true;
+        final readCount = ids.length;
+        final allRead = readCount > 0 && readCount >= visibleMembers.length;
+        widget.onReceipt(readCount, allRead ? 2 : 1);
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  /// 应读范围：群成员 − 发送者本人（对齐 H5 visibleMembers 口径；
+  /// 定向消息过滤依赖 receiverUserIds，Flutter 端暂未支持定向发送）。
+  List<ImGroupMember> get visibleMembers => widget.members.values
+      .where((m) => m.userId != widget.message.senderId)
+      .toList();
+
+  List<ImGroupMember> get _readMembers => visibleMembers
+      .where((m) => _readUserIds.contains(m.userId))
+      .toList();
+
+  List<ImGroupMember> get _unreadMembers => visibleMembers
+      .where((m) => !_readUserIds.contains(m.userId))
+      .toList();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final height = MediaQuery.of(context).size.height * 0.6;
+    final readCount = _readMembers.length;
+    final unreadCount = _unreadMembers.length;
+    final list = _tabUnread ? _unreadMembers : _readMembers;
+    return Container(
+      height: height,
+      decoration: BoxDecoration(
+        color: colors.card,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          children: [
+            // 标题栏
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 8, 0),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '消息已读情况',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: colors.text,
+                      ),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: Text(
+                      '关闭',
+                      style: TextStyle(fontSize: 14, color: colors.muted),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // 已读/未读页签（标题带数量）
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () => setState(() => _tabUnread = false),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        decoration: BoxDecoration(
+                          color: !_tabUnread
+                              ? AppColors.lime
+                              : colors.muted.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        alignment: Alignment.center,
+                        child: Text(
+                          '已读 $readCount',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: !_tabUnread ? Colors.black : colors.muted,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () => setState(() => _tabUnread = true),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        decoration: BoxDecoration(
+                          color: _tabUnread
+                              ? AppColors.lime
+                              : colors.muted.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        alignment: Alignment.center,
+                        child: Text(
+                          '未读 $unreadCount',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: _tabUnread ? Colors.black : colors.muted,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // 成员列表
+            Expanded(
+              child: _loading
+                  ? const Center(
+                      child: CircularProgressIndicator(color: AppColors.lime),
+                    )
+                  : list.isEmpty
+                      ? Center(
+                          child: Text(
+                            _tabUnread ? '全部已读' : '暂无已读成员',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: colors.muted,
+                            ),
+                          ),
+                        )
+                      : ListView.builder(
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          itemCount: list.length,
+                          itemBuilder: (context, index) {
+                            final m = list[index];
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 8,
+                              ),
+                              child: Row(
+                                children: [
+                                  ImAvatar(
+                                    src: m.avatar,
+                                    name: m.nickname,
+                                    size: 38,
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Text(
+                                      m.nickname,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        color: colors.text,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
             ),
           ],
         ),

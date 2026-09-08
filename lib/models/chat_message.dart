@@ -178,6 +178,91 @@ class FacePayload {
   };
 }
 
+/// 引用信息（content JSON 的 quote 字段，对齐 H5 QuoteMessage）。
+class QuotePayload {
+  /// 被引用消息编号。
+  final int messageId;
+
+  /// 被引用消息发送人。
+  final int senderId;
+
+  /// 被引用消息类型（用于摘要文案 [图片]/[语音] 等）。
+  final int type;
+
+  /// 被引用消息原始 content（JSON 字符串，不带自身 quote）。
+  final String content;
+
+  const QuotePayload({
+    required this.messageId,
+    required this.senderId,
+    required this.type,
+    required this.content,
+  });
+
+  factory QuotePayload.fromJson(Map<String, dynamic> json) => QuotePayload(
+    messageId: asInt(json['messageId']),
+    senderId: asInt(json['senderId']),
+    type: asInt(json['type'], ChatMsgType.text),
+    content: asString(json['content']),
+  );
+
+  Map<String, dynamic> toJson() => {
+    'messageId': messageId,
+    'senderId': senderId,
+    'type': type,
+    'content': content,
+  };
+
+  /// 引用摘要：文本取内层文本，其他类型给类型文案（截断 60 字符）。
+  /// 注意非文本消息的 content 无 content 键，extractTextContent 会回退
+  /// 返回原始 JSON（含 URL），因此非文本类型直接给类型标签。
+  String get summary {
+    if (type != ChatMsgType.text) {
+      return '[${_typeLabel(type)}]';
+    }
+    final s = extractTextContent(content);
+    return s.length > 60 ? '${s.substring(0, 60)}…' : s;
+  }
+
+  /// 图片/表情引用的媒体地址（引用块渲染缩略图用；其余类型为 null）。
+  String? get mediaUrl {
+    if (type != ChatMsgType.image && type != ChatMsgType.face) return null;
+    try {
+      final decoded = jsonDecode(content);
+      if (decoded is Map) {
+        final url = decoded['url']?.toString() ?? '';
+        if (url.isNotEmpty) return url;
+      }
+    } catch (_) {
+      // 非 JSON：无缩略图
+    }
+    return null;
+  }
+}
+
+String _typeLabel(int type) => switch (type) {
+      ChatMsgType.voice => '语音',
+      ChatMsgType.image => '图片',
+      ChatMsgType.video => '视频',
+      ChatMsgType.file => '文件',
+      ChatMsgType.face => '表情',
+      _ => '消息',
+    };
+
+/// 剥掉 content JSON 里的 quote 字段（转发/引用时避免嵌套引用）。
+String stripQuote(String content) {
+  try {
+    final decoded = jsonDecode(content);
+    if (decoded is Map<String, dynamic> && decoded.containsKey('quote')) {
+      final copy = Map<String, dynamic>.from(decoded)..remove('quote');
+      return jsonEncode(copy);
+    }
+  } catch (_) {
+    // 非 JSON：原样返回
+  }
+  return content;
+}
+
 /// 聊天页统一消息模型：
 /// 私聊/群聊/频道三类服务端 VO + 本地发送占位消息，统一供气泡渲染。
 class ChatMessage {
@@ -204,6 +289,12 @@ class ChatMessage {
   /// 上传进度（0.0~1.0，null 表示无进度跟踪或已完成）。
   final double? progress;
 
+  /// 群聊回执状态（仅群消息：发送时勾选回执，DONE=全部已读）。
+  final int receiptStatus;
+
+  /// 群聊已读人数（仅群消息）。
+  final int readCount;
+
   /// 是否自己发送（决定气泡左右方向）。
   final bool isSelf;
 
@@ -216,6 +307,8 @@ class ChatMessage {
     this.sendTime,
     this.status = ChatMessageStatus.sent,
     this.progress,
+    this.receiptStatus = 0,
+    this.readCount = 0,
     required this.isSelf,
   });
 
@@ -238,6 +331,8 @@ class ChatMessage {
     type: m.type,
     content: m.content,
     sendTime: m.sendTime,
+    receiptStatus: m.receiptStatus,
+    readCount: m.readCount,
     isSelf: m.isSelf,
   );
 
@@ -349,6 +444,8 @@ class ChatMessage {
     sendTime: sendTime,
     status: s,
     progress: progress,
+    receiptStatus: receiptStatus,
+    readCount: readCount,
     isSelf: isSelf,
   );
 
@@ -362,6 +459,8 @@ class ChatMessage {
     sendTime: sendTime,
     status: status,
     progress: progress,
+    receiptStatus: receiptStatus,
+    readCount: readCount,
     isSelf: isSelf,
   );
 
@@ -375,8 +474,26 @@ class ChatMessage {
     sendTime: sendTime,
     status: status,
     progress: p,
+    receiptStatus: receiptStatus,
+    readCount: readCount,
     isSelf: isSelf,
   );
+
+  /// 更新回执（已读人数/状态回写）。
+  ChatMessage withReceipt({required int status, required int count}) =>
+      ChatMessage(
+        id: id,
+        clientMessageId: clientMessageId,
+        senderId: senderId,
+        type: type,
+        content: content,
+        sendTime: sendTime,
+        status: this.status,
+        progress: progress,
+        receiptStatus: status,
+        readCount: count,
+        isSelf: isSelf,
+      );
 
   /// 唯一 key：服务端消息用 id，本地占位用 clientMessageId（去重/替换用）。
   String get key => id != null ? 's$id' : 'c$clientMessageId';
@@ -427,9 +544,40 @@ class ChatMessage {
             : null)
       : null;
 
-  /// 是否可长按操作（文本消息 + 已被服务端确认）。
+  /// 引用信息（content JSON 的 quote 字段，对齐 H5 Quotable）。
+  QuotePayload? get quotePayload {
+    final q = contentMap['quote'];
+    if (q is! Map) return null;
+    final quote = QuotePayload.fromJson(Map<String, dynamic>.from(q));
+    return quote.messageId == 0 && quote.content.isEmpty ? null : quote;
+  }
+
+  /// 从本消息构造引用对象（回复/引用时序列化进新消息 content 的 quote 字段）。
+  Map<String, dynamic> buildQuote() => {
+    'messageId': id ?? 0,
+    'senderId': senderId,
+    'type': type,
+    'content': stripQuote(content),
+  };
+
+  /// 是否可长按操作（正常聊天消息：服务端已确认；菜单项再逐项动态判断）。
   bool get operable =>
-      isSelf && type == ChatMsgType.text && status == ChatMessageStatus.sent;
+      id != null &&
+      status == ChatMessageStatus.sent &&
+      (type == ChatMsgType.text ||
+          type == ChatMsgType.image ||
+          type == ChatMsgType.voice ||
+          type == ChatMsgType.video ||
+          type == ChatMsgType.file ||
+          type == ChatMsgType.face);
+
+  /// 是否可撤回：自己的消息 + 发送时间在撤回窗口内（对齐 H5 2 分钟窗口）。
+  bool canRecall({Duration window = const Duration(minutes: 2)}) {
+    if (id == null || !isSelf || status != ChatMessageStatus.sent) return false;
+    final t = sendTime;
+    if (t == null) return false;
+    return DateTime.now().difference(t) <= window;
+  }
 
   /// 展示文本：文本消息取内层文本；系统/群事件等非文本类型给友好文案。
   String get displayText {

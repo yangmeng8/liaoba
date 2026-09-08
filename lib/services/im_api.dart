@@ -266,6 +266,21 @@ class ImApi {
     return asInt(ApiClient.unwrap(resp));
   }
 
+  /// 查询群消息已读用户编号列表（回执详情用；
+  /// 未读列表由客户端拿群成员表做差集，一次请求出两个页签）。
+  static Future<List<int>> getGroupMessageReadUserIds({
+    required int groupId,
+    required int messageId,
+  }) async {
+    final resp = await ApiClient.dio.get(
+      '/admin-api/im/message/group/get-read-user-ids',
+      queryParameters: {'groupId': groupId, 'messageId': messageId},
+    );
+    final data = ApiClient.unwrap(resp);
+    if (data is! List) return const [];
+    return data.map((e) => asInt(e)).where((id) => id > 0).toList();
+  }
+
   // ==================== 撤回 ====================
 
   /// 撤回私聊消息（服务端会向对方推送 RECALL 通知）。
