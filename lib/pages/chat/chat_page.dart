@@ -343,10 +343,12 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   /// 历史翻页：maxId=已加载最早消息 id（不含），结果追加到列表尾部（更旧方向）。
+  /// 注意：reverse 列表数组头部=最新、尾部=最旧，游标必须从尾部取——
+  /// 否则取到最新消息 id，服务端每次返回同一批重叠数据造成无限重复加载。
   Future<void> _loadOlder() async {
     if (_loadingMore || _noMore || _loading) return;
     int? oldestId;
-    for (final m in _messages) {
+    for (final m in _messages.reversed) {
       if (m.id != null) {
         oldestId = m.id;
         break;
@@ -358,7 +360,11 @@ class _ChatPageState extends State<ChatPage> {
       final older = await _query(maxId: oldestId);
       if (!mounted) return;
       setState(() {
-        _messages.addAll(older);
+        // 去重防御：与翻页边界/并发刷新重叠的消息不重复追加
+        final existKeys = _messages.map((m) => m.key).toSet();
+        _messages.addAll(
+          older.where((m) => existKeys.add(m.key)),
+        );
         if (older.length < _pageSize) _noMore = true;
       });
     } catch (_) {
