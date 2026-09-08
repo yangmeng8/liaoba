@@ -72,6 +72,21 @@ class ImApi {
         .toList();
   }
 
+  /// 获得群成员列表（群聊消息发送者头像/昵称解析用）。
+  static Future<List<ImGroupMember>> getGroupMemberList({
+    required int groupId,
+  }) async {
+    final resp = await ApiClient.dio.get(
+      '/admin-api/im/group-member/list',
+      queryParameters: {'groupId': groupId},
+    );
+    final data = ApiClient.unwrap(resp);
+    if (data is! List) return const [];
+    return data
+        .map((e) => ImGroupMember.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
   /// 增量拉取私聊消息（写入本地缓存用；会话列表数据源）。
   /// [minId] 游标：拉取 id 大于 minId 的消息；首次传 0 全量拉取。
   static Future<List<ImPrivateMessage>> pullPrivateMessages({

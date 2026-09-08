@@ -21,12 +21,18 @@ class AuthManager {
   static const _kRefreshToken = 'auth.refresh_token';
   static const _kExpiresTime = 'auth.expires_time';
   static const _kOpenid = 'auth.openid';
+  static const _kNickname = 'auth.nickname';
+  static const _kAvatar = 'auth.avatar';
 
   int? userId;
   String? accessToken;
   String? refreshToken;
   String? expiresTime;
   String? openid;
+
+  /// 登录用户昵称/头像（来自 /system/auth/get-permission-info，null=未加载）。
+  String? nickname;
+  String? avatar;
 
   bool get isLoggedIn => accessToken != null && accessToken!.isNotEmpty;
 
@@ -38,6 +44,17 @@ class AuthManager {
     refreshToken = prefs.getString(_kRefreshToken);
     expiresTime = prefs.getString(_kExpiresTime);
     openid = prefs.getString(_kOpenid);
+    nickname = prefs.getString(_kNickname);
+    avatar = prefs.getString(_kAvatar);
+  }
+
+  /// 更新登录用户资料（昵称/头像，来自权限信息接口）。
+  Future<void> updateProfile({required String nickname, required String avatar}) async {
+    this.nickname = nickname;
+    this.avatar = avatar;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kNickname, nickname);
+    await prefs.setString(_kAvatar, avatar);
   }
 
   /// 注册/登录成功后保存。
@@ -89,6 +106,8 @@ class AuthManager {
     refreshToken = null;
     expiresTime = null;
     openid = null;
+    nickname = null;
+    avatar = null;
 
     final prefs = await SharedPreferences.getInstance();
     await prefs
@@ -96,6 +115,8 @@ class AuthManager {
         .then((_) => prefs.remove(_kAccessToken))
         .then((_) => prefs.remove(_kRefreshToken))
         .then((_) => prefs.remove(_kExpiresTime))
-        .then((_) => prefs.remove(_kOpenid));
+        .then((_) => prefs.remove(_kOpenid))
+        .then((_) => prefs.remove(_kNickname))
+        .then((_) => prefs.remove(_kAvatar));
   }
 }

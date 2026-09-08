@@ -122,4 +122,18 @@ class AuthApi {
       );
     }
   }
+
+  /// 拉取登录用户资料（昵称/头像）并缓存（对应 H5 登录后调用的权限信息接口）。
+  static Future<void> loadUserProfile() async {
+    final resp = await ApiClient.dio
+        .get('/admin-api/system/auth/get-permission-info');
+    final data = ApiClient.unwrap(resp);
+    final user = data is Map ? data['user'] : null;
+    if (user is Map) {
+      await AuthManager.instance.updateProfile(
+        nickname: (user['nickname'] ?? '').toString(),
+        avatar: (user['avatar'] ?? '').toString(),
+      );
+    }
+  }
 }

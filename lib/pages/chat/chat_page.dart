@@ -21,11 +21,14 @@ import '../../models/im_conversation.dart';
 import '../../models/im_face.dart';
 import '../../models/im_ws_frame.dart';
 import '../../services/api_client.dart';
+import '../../services/auth_api.dart';
+import '../../services/auth_manager.dart';
 import '../../services/im_api.dart';
 import '../../services/im_websocket.dart';
 import '../../shared/app_colors.dart';
 import '../../shared/app_theme.dart';
 import '../../shared/chat_background.dart';
+import '../../shared/im_avatar.dart';
 import '../../shared/json_utils.dart';
 import '../../stores/conversation_store.dart';
 import 'face_picker_sheet.dart';
@@ -115,6 +118,14 @@ class _ChatPageState extends State<ChatPage> {
   /// 频道消息全量缓存（频道无 list 接口，读 pull 结果内存分页）。
   List<ChatMessage>? _channelAll;
 
+  /// 好友索引：friendUserId → ImFriend（群聊消息发送者头像/昵称解析用）。
+  /// 拉取失败时静默降级为字母色卡兜底。
+  final Map<int, ImFriend> _friends = {};
+
+  /// 群成员索引：userId → ImGroupMember（群聊发送者头像/昵称解析，
+  /// 优先于好友表，对齐 H5 getSenderAvatar 的降级顺序）。
+  final Map<int, ImGroupMember> _groupMembers = {};
+
   final _scrollCtrl = ScrollController();
   final _inputCtrl = TextEditingController();
   final _inputFocus = FocusNode();
@@ -145,7 +156,83 @@ class _ChatPageState extends State<ChatPage> {
         _wsRefreshTimer = Timer(_wsRefreshDebounce, _refreshLatest);
       }
     });
+    // 群聊/频道：拉好友表建发送者头像/昵称索引（私聊直接用会话传入的头像）
+    if (!_isPrivate) _loadFriends();
+    // 群聊：拉群成员表（头像解析优先于好友表，对齐 H5 降级顺序）
+    if (_isGroup) _loadGroupMembers();
+    // 自己的头像/昵称（登录用户资料，null=尚未拉取过）
+    _loadSelfProfile();
     _loadFirstPage();
+  }
+
+  /// 拉取好友列表建索引（对齐 H5 getSenderAvatar 降级链的「好友表」层）。
+  Future<void> _loadFriends() async {
+    try {
+      final friends = await ImApi.getFriendList();
+      if (!mounted) return;
+      setState(() {
+        for (final f in friends) {
+          _friends[f.friendUserId] = f;
+        }
+      });
+    } catch (_) {
+      // 静默：降级为字母色卡兜底
+    }
+  }
+
+  /// 拉取群成员表建索引（降级链的「群成员表」层，优先于好友表）。
+  Future<void> _loadGroupMembers() async {
+    try {
+      final members = await ImApi.getGroupMemberList(
+        groupId: widget.targetId,
+      );
+      if (!mounted) return;
+      setState(() {
+        for (final m in members) {
+          _groupMembers[m.userId] = m;
+        }
+      });
+    } catch (_) {
+      // 静默：降级为好友表 / 字母色卡
+    }
+  }
+
+  /// 拉取登录用户资料（自己的头像/昵称，来自权限信息接口）。
+  Future<void> _loadSelfProfile() async {
+    if (AuthManager.instance.avatar != null) return; // 已缓存
+    try {
+      await AuthApi.loadUserProfile();
+      if (mounted) setState(() {}); // 头像从色卡刷新为真实头像
+    } catch (_) {
+      // 静默：保持色卡兜底
+    }
+  }
+
+  /// 发送人头像 URL（对齐 H5 senderAvatar 解析链）：
+  /// 自己 → 权限信息接口缓存的头像；私聊 → 会话聚合传入的对方头像；
+  /// 群聊 → 群成员表 → 好友表 → 空串（色卡兜底）。
+  String _avatarUrlFor(ChatMessage m) {
+    if (m.isSelf) return AuthManager.instance.avatar ?? '';
+    if (_isPrivate) return widget.avatar;
+    return _groupMembers[m.senderId]?.avatar ??
+        _friends[m.senderId]?.avatar ??
+        '';
+  }
+
+  /// 发送人名字（色卡取字/配色的稳定 key，用真实昵称而非备注）：
+  /// 自己 → 登录用户昵称；私聊 → 会话标题；
+  /// 群聊 → 群成员昵称 → 好友昵称 → '用户{senderId}'。
+  String _avatarNameFor(ChatMessage m) {
+    if (m.isSelf) {
+      final n = AuthManager.instance.nickname;
+      return (n != null && n.isNotEmpty) ? n : '我';
+    }
+    if (_isPrivate) return widget.title;
+    final gm = _groupMembers[m.senderId];
+    if (gm != null && gm.nickname.isNotEmpty) return gm.nickname;
+    final f = _friends[m.senderId];
+    if (f != null && f.nickname.isNotEmpty) return f.nickname;
+    return '用户${m.senderId}';
   }
 
   @override
@@ -1279,6 +1366,8 @@ class _ChatPageState extends State<ChatPage> {
           older: older,
           showReadState: _isPrivate,
           peerMaxReadId: _peerMaxReadId,
+          avatarUrl: _avatarUrlFor(message),
+          avatarName: _avatarNameFor(message),
           playingVoiceKey: _playingVoiceKey,
           loadingVoiceKey: _loadingVoiceKey,
           onPlayVoice: (m) {
@@ -1498,6 +1587,12 @@ class _MessageItem extends StatelessWidget {
   final ChatMessage message;
   final ChatMessage? older;
 
+  /// 发送人头像地址（空串时 ImAvatar 走字母色卡兜底）。
+  final String avatarUrl;
+
+  /// 发送人名字（色卡取字/配色的稳定 key）。
+  final String avatarName;
+
   /// 是否显示已读小字（私聊）。
   final bool showReadState;
   final int peerMaxReadId;
@@ -1531,6 +1626,8 @@ class _MessageItem extends StatelessWidget {
   const _MessageItem({
     required this.message,
     required this.older,
+    required this.avatarUrl,
+    required this.avatarName,
     required this.showReadState,
     required this.peerMaxReadId,
     required this.playingVoiceKey,
@@ -1710,23 +1807,35 @@ class _MessageItem extends StatelessWidget {
       ),
     );
 
+    // 头像贴行两侧（微信风格：自己头像在右、对方在左，与气泡顶部对齐）
+    final avatar = ImAvatar(src: avatarUrl, name: avatarName, size: 40);
+
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
         mainAxisAlignment: isSelf
             ? MainAxisAlignment.end
             : MainAxisAlignment.start,
-        crossAxisAlignment: CrossAxisAlignment.end,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (!isSelf) avatar,
           if (isSelf) ..._buildStateIcon(colors, sending, failed),
           Flexible(
-            child: Column(
-              crossAxisAlignment: isSelf
-                  ? CrossAxisAlignment.end
-                  : CrossAxisAlignment.start,
-              children: [bubble, ?readState],
+            child: Padding(
+              // 头像与气泡的间距（两侧对称 8）
+              padding: EdgeInsets.only(
+                left: isSelf ? 0 : 8,
+                right: isSelf ? 8 : 0,
+              ),
+              child: Column(
+                crossAxisAlignment: isSelf
+                    ? CrossAxisAlignment.end
+                    : CrossAxisAlignment.start,
+                children: [bubble, ?readState],
+              ),
             ),
           ),
+          if (isSelf) avatar,
           if (!isSelf) ..._buildStateIcon(colors, sending, failed),
         ],
       ),

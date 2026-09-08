@@ -104,6 +104,27 @@ class ImGroup {
       groupRemark.isNotEmpty ? groupRemark : (name.isNotEmpty ? name : '群$id');
 }
 
+/// 群成员（对应后端 ImGroupMemberRespVO，仅取头像解析所需字段）。
+class ImGroupMember {
+  final int userId;
+  final String nickname;
+  final String avatar;
+
+  const ImGroupMember({
+    required this.userId,
+    required this.nickname,
+    required this.avatar,
+  });
+
+  factory ImGroupMember.fromJson(Map<String, dynamic> json) {
+    return ImGroupMember(
+      userId: asInt(json['userId']),
+      nickname: asString(json['nickname']),
+      avatar: asString(json['avatar']),
+    );
+  }
+}
+
 /// 会话读位置（对应后端 ConversationReadRespVO）。
 class ImConversationRead {
   final int id;
