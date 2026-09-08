@@ -69,6 +69,10 @@ class ApiClient {
               '<-- ${e.requestOptions.method} ${e.requestOptions.uri} [${e.response?.statusCode}]');
           _log('错误', '返回: ${e.response?.data}');
           _log('错误', '异常: ${e.message}');
+          // HTTP 层 401：登录态失效，跳回登录页
+          if (e.response?.statusCode == 401) {
+            AuthManager.instance.handleUnauthorized();
+          }
           handler.next(e);
         },
       ),
@@ -83,6 +87,10 @@ class ApiClient {
     if (body is! Map || !body.containsKey('code')) return body;
     final code = body['code'];
     if (code != 0) {
+      // 业务码 401：账号未登录（token 失效），跳回登录页
+      if (code == 401) {
+        AuthManager.instance.handleUnauthorized();
+      }
       throw ApiException(code is int ? code : -1,
           (body['msg'] ?? '请求失败').toString());
     }

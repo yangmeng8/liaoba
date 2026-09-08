@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../models/im_face.dart';
 import '../../services/im_api.dart';
@@ -37,6 +38,12 @@ class _FacePickerSheetState extends State<FacePickerSheet>
   List<ImFaceItem> _userItems = [];
   List<ImFacePack> _packs = [];
   bool _loaded = false;
+
+  /// 收藏表情上传中（"+"格显示转圈，防重复点击）。
+  bool _uploading = false;
+
+  /// 服务器 nginx 上传体积上限（实测约 10MB，客户端按 9MB 拦截）。
+  static const int _serverMaxBytes = 9 * 1024 * 1024;
 
   @override
   void initState() {
@@ -167,13 +174,14 @@ class _FacePickerSheetState extends State<FacePickerSheet>
     );
   }
 
-  /// 图片表情网格：点击发送 FACE 消息；[deletable] 时长按删除（个人收藏）。
+  /// 图片表情网格：点击发送 FACE 消息；[deletable] 时长按删除（个人收藏）、
+  /// 首格为"+"上传新收藏。
   Widget _buildFaceGrid(
     ThemeColors colors,
     List<ImFaceItem> items, {
     required bool deletable,
   }) {
-    if (items.isEmpty) {
+    if (items.isEmpty && !deletable) {
       return Center(
         child: Text(
           '暂无表情',
@@ -189,9 +197,11 @@ class _FacePickerSheetState extends State<FacePickerSheet>
         mainAxisSpacing: 8,
         crossAxisSpacing: 8,
       ),
-      itemCount: items.length,
+      // 收藏页签：+1 给首格的上传入口
+      itemCount: items.length + (deletable ? 1 : 0),
       itemBuilder: (context, i) {
-        final item = items[i];
+        if (deletable && i == 0) return _buildAddTile(colors);
+        final item = items[deletable ? i - 1 : i];
         final url = _normalizeUrl(item.url);
         return GestureDetector(
           onTap: () => widget.onFaceSelected(item),
@@ -215,6 +225,118 @@ class _FacePickerSheetState extends State<FacePickerSheet>
         );
       },
     );
+  }
+
+  /// 收藏网格首格的"+"上传入口。
+  Widget _buildAddTile(ThemeColors colors) {
+    return GestureDetector(
+      onTap: _uploading ? null : _pickAndUploadFace,
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: colors.muted.withOpacity(0.5)),
+        ),
+        alignment: Alignment.center,
+        child: _uploading
+            ? const SizedBox(
+                width: 22,
+                height: 22,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: AppColors.lime,
+                ),
+              )
+            : Icon(Icons.add, size: 30, color: colors.muted),
+      ),
+    );
+  }
+
+  /// 选图 → 上传(/infra/file/upload, directory=im/face) → 创建收藏(face-user-item/create)。
+  Future<void> _pickAndUploadFace() async {
+    final picker = ImagePicker();
+    final XFile? file;
+    try {
+      file = await picker.pickImage(
+        source: ImageSource.gallery,
+        // 服务端限制：渲染宽高 ≤ 2048px（iPhone 原图可达 1170×2532）。
+        // 选图时即等比降采样（只缩不放），上传文件与上报宽高同步变小
+        maxWidth: 2048,
+        maxHeight: 2048,
+      );
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('选择图片失败')));
+      }
+      return;
+    }
+    if (file == null) return;
+    final f = file; // 闭包内使用需非空提升
+    if (await f.length() > _serverMaxBytes) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('图片过大：服务器限制约 10MB')),
+        );
+      }
+      return;
+    }
+
+    setState(() => _uploading = true);
+    try {
+      // 宽高：解码原图，失败（如 svg）兜底 150×150（与 H5 示例一致）
+      var width = 150;
+      var height = 150;
+      try {
+        final decoded = await decodeImageFromList(await f.readAsBytes());
+        width = decoded.width;
+        height = decoded.height;
+      } catch (_) {
+        // 无法解码（svg 等）：用默认尺寸
+      }
+      // 兜底：超 2048 时等比钳制（服务端渲染宽高上限）
+      if (width > 2048 || height > 2048) {
+        final scale = 2048 / (width > height ? width : height);
+        width = (width * scale).round();
+        height = (height * scale).round();
+      }
+
+      // 服务端限制：表情名长度 ≤ 64（iOS 相册临时文件名会超）
+      final name = _faceName(f.name);
+
+      final url = await ImApi.uploadFile(
+        filePath: f.path,
+        directory: 'im/face',
+      );
+      final id = await ImApi.createFaceUserItem(
+        url: url,
+        width: width,
+        height: height,
+        name: name,
+      );
+      if (mounted) {
+        setState(() {
+          _userItems.insert(
+            0,
+            ImFaceItem(
+              id: id,
+              url: url,
+              name: name,
+              width: width,
+              height: height,
+            ),
+          );
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('上传失败，请重试')));
+      }
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
   }
 
   /// 删除确认（个人收藏表情）。
@@ -250,6 +372,16 @@ class _FacePickerSheetState extends State<FacePickerSheet>
       }
     }
   }
+}
+
+/// 表情名服务端限制长度（face-user-item/create 校验 ≤ 64）。
+/// 超长时截断并尽量保留扩展名（iOS 相册临时文件名 image_picker_xxx.png 达 80+ 字符）。
+String _faceName(String raw) {
+  const maxLen = 64;
+  if (raw.length <= maxLen) return raw;
+  final dot = raw.lastIndexOf('.');
+  final ext = (dot > 0 && dot >= maxLen - 12) ? raw.substring(dot) : '';
+  return raw.substring(0, maxLen - ext.length) + ext;
 }
 
 /// 后端测试数据 URL 可能被反引号包裹（`http://...`），加载前剥掉。

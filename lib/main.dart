@@ -11,12 +11,18 @@ import 'shared/app_theme.dart';
 import 'shared/font_scale_manager.dart';
 import 'shared/theme_manager.dart';
 
+/// 全局导航 Key：接口 401 时从任意页面清栈跳转登录页。
+final GlobalKey<NavigatorState> _rootNavigatorKey =
+    GlobalKey<NavigatorState>(debugLabel: 'root');
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // 启动时恢复字体档位、主题模式和登录态
   await FontScaleManager.instance.load();
   await ThemeManager.instance.load();
   await AuthManager.instance.load();
+  // 注入全局导航 Key（AuthManager 401 处理用）
+  AuthManager.instance.rootNavigatorKey = _rootNavigatorKey;
   runApp(const LiaobaApp());
 }
 
@@ -31,9 +37,12 @@ class LiaobaApp extends StatelessWidget {
         builder: (context, _) => MaterialApp(
           debugShowCheckedModeBanner: false,
           title: '聊吧',
+          navigatorKey: _rootNavigatorKey,
           theme: AppTheme.lightTheme,
           darkTheme: AppTheme.darkTheme,
           themeMode: ThemeManager.instance.mode,
+          // 401 全局跳转目标（AuthManager.handleUnauthorized 使用）
+          routes: {'/login': (_) => const LoginPage()},
           // 全局字体缩放：注入 textScaler
           builder: (context, child) => MediaQuery(
             data: MediaQuery.of(context).copyWith(

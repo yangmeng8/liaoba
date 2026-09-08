@@ -5,10 +5,14 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:photo_view/photo_view.dart';
+import 'package:video_compress/video_compress.dart';
 import 'package:video_player/video_player.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
 
@@ -59,6 +63,10 @@ class _ChatPageState extends State<ChatPage> {
   /// 媒体文件大小上限（16MB，与 H5 MESSAGE_MEDIA_MAX_BYTES 一致）。
   static const int _mediaMaxBytes = 16 * 1024 * 1024;
 
+  /// 服务器 nginx client_max_body_size 实测约 10MB（9MB 通过 / 10MB 413），
+  /// 客户端按 9MB 拦截留余量（multipart 还有少量协议开销）。
+  static const int _serverMaxBytes = 9 * 1024 * 1024;
+
   /// 危险文件扩展名黑名单（对齐 H5 DANGEROUS_FILE_EXTENSIONS）。
   static const Set<String> _dangerousExtensions = {
     'exe', 'bat', 'cmd', 'com', 'cpl', 'dll', 'inf', 'ins', 'inx', 'isu',
@@ -100,6 +108,9 @@ class _ChatPageState extends State<ChatPage> {
   final Map<String, String> _voiceLocalCache = {};
   final Map<String, Future<String>> _voiceResolving = {}; // 并发下载去重
   HttpClient? _voiceDlClient; // 复用连接池：同域名 TLS 握手只做一次
+
+  /// 文件消息下载进度：消息 key → 0~1（卡片内实时进度条）。
+  final Map<String, double> _fileDownloadProgress = {};
 
   /// 频道消息全量缓存（频道无 list 接口，读 pull 结果内存分页）。
   List<ChatMessage>? _channelAll;
@@ -413,17 +424,26 @@ class _ChatPageState extends State<ChatPage> {
     final picker = ImagePicker();
     final XFile? file;
     try {
-      file = await picker.pickImage(source: source, imageQuality: 100);
+      // 选图即压缩（对齐 H5 compressed 语义）：最长边 2560 + 质量 80，
+      // 相机原图可达 8~12MB，超过服务器 nginx ~10MB 限制会 413
+      file = await picker.pickImage(
+        source: source,
+        maxWidth: 2560,
+        maxHeight: 2560,
+        imageQuality: 80,
+      );
     } catch (e) {
       if (mounted) _showSnack(ApiClient.errorMessage(e));
       return;
     }
     if (file == null) return;
 
-    // 校验大小 ≤ 16MB
+    // 校验大小（压缩后仍超服务器限制才拦截）
     final length = await file.length();
-    if (length > _mediaMaxBytes) {
-      if (mounted) _showSnack('图片大小不能超过 16MB');
+    if (length > _serverMaxBytes) {
+      if (mounted) {
+        _showSnack('图片过大（服务器限制约 10MB），请换一张试试');
+      }
       return;
     }
 
@@ -457,6 +477,7 @@ class _ChatPageState extends State<ChatPage> {
       );
     } catch (e) {
       _markFailed(clientMessageId, e);
+      if (mounted) _showSnack(_uploadErrorMessage(e));
       return;
     }
     if (!mounted) return;
@@ -497,20 +518,51 @@ class _ChatPageState extends State<ChatPage> {
       return;
     }
 
-    // 读取视频元信息（时长/宽高）并提取封面图
+    // 压缩视频再上传（对齐 H5 uni.chooseVideo compressed: true）：
+    // 原始相机视频可达数十 MB，超过服务器 nginx ~10MB 限制会 413。
+    // 压缩失败/取消则回退原文件。
+    String videoPath = file.path;
+    var size = length;
+    if (mounted) _showSnack('视频处理中…');
+    try {
+      final info = await VideoCompress.compressVideo(
+        file.path,
+        quality: VideoQuality.MediumQuality,
+        deleteOrigin: false,
+      );
+      final compressedPath = info?.path;
+      final compressedSize = info?.filesize;
+      if (compressedPath != null &&
+          compressedSize != null &&
+          compressedSize > 0 &&
+          compressedSize < size) {
+        videoPath = compressedPath;
+        size = compressedSize;
+      }
+    } catch (_) {
+      // 压缩失败：用原文件继续（下面的大小校验兜底）
+    }
+    if (size > _serverMaxBytes) {
+      if (mounted) {
+        _showSnack('视频过大（压缩后 ${_formatFileSize(size)}），请选择较短的视频');
+      }
+      return;
+    }
+
+    // 读取视频元信息（时长/宽高）并提取封面图（用压缩后的文件）
     int duration = 0;
     int width = 0;
     int height = 0;
     String? coverPath;
     try {
-      final controller = VideoPlayerController.file(File(file.path));
+      final controller = VideoPlayerController.file(File(videoPath));
       await controller.initialize();
       duration = controller.value.duration.inSeconds;
       width = controller.value.size.width.toInt();
       height = controller.value.size.height.toInt();
       await controller.dispose();
       coverPath = await VideoThumbnail.thumbnailFile(
-        video: file.path,
+        video: videoPath,
         imageFormat: ImageFormat.JPEG,
         maxWidth: 320,
         quality: 75,
@@ -523,12 +575,12 @@ class _ChatPageState extends State<ChatPage> {
     final placeholder = ChatMessage.localVideo(
       clientMessageId: clientMessageId,
       payload: VideoPayload(
-        url: file.path,
+        url: videoPath,
         coverUrl: coverPath ?? '',
         duration: duration,
         width: width,
         height: height,
-        size: length,
+        size: size,
       ),
     );
     setState(() => _messages.insert(0, placeholder));
@@ -538,13 +590,14 @@ class _ChatPageState extends State<ChatPage> {
     String url;
     try {
       url = await ImApi.uploadFile(
-        filePath: file.path,
-        directory: 'im/message',
+        filePath: videoPath,
+        directory: 'im/video',
         onSendProgress: (sent, total) =>
             _updateProgress(clientMessageId, (sent / total) * 0.9),
       );
     } catch (e) {
       _markFailed(clientMessageId, e);
+      if (mounted) _showSnack(_uploadErrorMessage(e));
       return;
     }
     if (!mounted) return;
@@ -555,7 +608,7 @@ class _ChatPageState extends State<ChatPage> {
       try {
         coverUrl = await ImApi.uploadFile(
           filePath: coverPath,
-          directory: 'im/message',
+          directory: 'im/video-cover',
           onSendProgress: (sent, total) =>
               _updateProgress(clientMessageId, 0.9 + (sent / total) * 0.1),
         );
@@ -573,7 +626,7 @@ class _ChatPageState extends State<ChatPage> {
         duration: duration,
         width: width,
         height: height,
-        size: length,
+        size: size,
       ),
     );
     _replaceMessage(local);
@@ -603,8 +656,9 @@ class _ChatPageState extends State<ChatPage> {
     }
 
     final size = f.size;
-    if (size > _mediaMaxBytes) {
-      if (mounted) _showSnack('文件大小不能超过 16MB');
+    // 文件不压缩，直接按服务器实际上限拦截（nginx ~10MB，留余量取 9MB）
+    if (size > _serverMaxBytes) {
+      if (mounted) _showSnack('文件过大：服务器限制约 10MB');
       return;
     }
 
@@ -632,6 +686,7 @@ class _ChatPageState extends State<ChatPage> {
       );
     } catch (e) {
       _markFailed(clientMessageId, e);
+      if (mounted) _showSnack(_uploadErrorMessage(e));
       return;
     }
     if (!mounted) return;
@@ -695,6 +750,15 @@ class _ChatPageState extends State<ChatPage> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  /// 上传失败的错误文案：413（nginx 体积超限）给出明确指引。
+  String _uploadErrorMessage(Object e) {
+    if (e is DioException) {
+      final code = e.response?.statusCode;
+      if (code == 413) return '上传失败：文件超过服务器限制（约 10MB）';
+    }
+    return ApiClient.errorMessage(e);
   }
 
   /// 表情面板选中的 emoji：插入输入框光标处（随文本消息一起发送）。
@@ -769,6 +833,88 @@ class _ChatPageState extends State<ChatPage> {
   /// 预热语音缓存：语音气泡渲染时后台调用（去重），用户点击时即取即用。
   void _prefetchVoice(String url) {
     _resolvePlayableUrl(url).then((_) {}, onError: (_) {});
+  }
+
+  /// 全屏预览图片（对齐 H5 uni.previewImage：缩放/双击）。
+  void _previewImage(String url) {
+    final full = _staticUrl(url);
+    if (full.isEmpty) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        fullscreenDialog: true,
+        builder: (_) => _ImageViewerPage(url: full),
+      ),
+    );
+  }
+
+  /// 全屏播放视频（对齐 H5 <video> controls 体验）。
+  void _playVideo(String url, String coverUrl) {
+    final full = _staticUrl(url);
+    if (full.isEmpty || _isLocalPath(full)) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        fullscreenDialog: true,
+        builder: (_) => _VideoPlayerPage(url: full, coverUrl: coverUrl),
+      ),
+    );
+  }
+
+  /// 打开文件消息（对齐 H5 openAttachment）：
+  /// - URL 为图片扩展名 → 全屏预览（与图片消息同体验）
+  /// - 其他 → 下载到临时目录（卡片内进度条）→ 系统查看器打开
+  Future<void> _openFileMessage(ChatMessage message) async {
+    final payload = message.filePayload;
+    if (payload == null) return;
+    final url = _staticUrl(payload.url);
+    if (url.isEmpty || _isLocalPath(url)) return;
+
+    if (_isImageFileUrl(url)) {
+      _previewImage(url);
+      return;
+    }
+
+    final key = message.key;
+    if (_fileDownloadProgress.containsKey(key)) return; // 下载中，忽略重复点击
+    setState(() => _fileDownloadProgress[key] = 0.0);
+    try {
+      // 文件名按消息 key 存放，避免不同消息同名文件互相覆盖
+      final safeName = payload.name.replaceAll(
+        RegExp(r'[/\\:*?"<>|]'),
+        '_',
+      );
+      final dir =
+          '${(await getTemporaryDirectory()).path}/files/$key';
+      await Directory(dir).create(recursive: true);
+      final savePath = '$dir/$safeName';
+      await ApiClient.dio.download(
+        url,
+        savePath,
+        options: Options(
+          // 覆盖全局 15s 接收超时（大文件慢网）
+          receiveTimeout: const Duration(minutes: 5),
+          responseType: ResponseType.bytes,
+        ),
+        onReceiveProgress: (received, total) {
+          if (total > 0 && mounted) {
+            setState(() => _fileDownloadProgress[key] = received / total);
+          }
+        },
+      );
+      if (mounted) setState(() => _fileDownloadProgress.remove(key));
+      final result = await OpenFilex.open(savePath);
+      if (result.type != ResultType.done && mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('附件打开失败')));
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _fileDownloadProgress.remove(key));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('附件下载失败')));
+      }
+    }
   }
 
   /// 解析出可直接交给播放器的地址（带缓存/去重）：
@@ -1142,6 +1288,10 @@ class _ChatPageState extends State<ChatPage> {
             }
           },
           onPrefetchVoice: _prefetchVoice,
+          fileDownloadProgress: _fileDownloadProgress,
+          onPreviewImage: _previewImage,
+          onPlayVideo: _playVideo,
+          onOpenFile: _openFileMessage,
           onRetry: () => _retryMessage(message),
           onRecall: () => _recall(message),
         );
@@ -1363,6 +1513,18 @@ class _MessageItem extends StatelessWidget {
 
   /// 预热语音缓存（气泡渲染时后台调用，内部去重）。
   final ValueChanged<String> onPrefetchVoice;
+
+  /// 文件消息下载进度：消息 key → 0~1（卡片内进度条）。
+  final Map<String, double> fileDownloadProgress;
+
+  /// 点击图片气泡（全屏预览原图）。
+  final ValueChanged<String> onPreviewImage;
+
+  /// 点击视频气泡（全屏播放）。
+  final void Function(String url, String coverUrl) onPlayVideo;
+
+  /// 点击文件气泡（图片扩展名走预览，否则下载打开）。
+  final ValueChanged<ChatMessage> onOpenFile;
   final VoidCallback onRetry;
   final VoidCallback onRecall;
 
@@ -1375,6 +1537,10 @@ class _MessageItem extends StatelessWidget {
     required this.loadingVoiceKey,
     required this.onPlayVoice,
     required this.onPrefetchVoice,
+    required this.fileDownloadProgress,
+    required this.onPreviewImage,
+    required this.onPlayVideo,
+    required this.onOpenFile,
     required this.onRetry,
     required this.onRecall,
   });
@@ -1459,21 +1625,42 @@ class _MessageItem extends StatelessWidget {
       );
     } else if (message.type == ChatMsgType.image &&
         message.imagePayload != null) {
-      content = _ImageBubbleBody(
-        payload: message.imagePayload!,
-        progress: message.progress,
+      // 上传中（progress != null）禁止预览；failed 时让外层气泡的
+      // 重试逻辑接手（内层手势会赢得竞争，必须置 null）
+      final imgPayload = message.imagePayload!;
+      content = GestureDetector(
+        onTap: (message.progress == null && !failed)
+            ? () => onPreviewImage(imgPayload.url)
+            : null,
+        child: _ImageBubbleBody(
+          payload: imgPayload,
+          progress: message.progress,
+        ),
       );
     } else if (message.type == ChatMsgType.video &&
         message.videoPayload != null) {
-      content = _VideoBubbleBody(
-        payload: message.videoPayload!,
-        progress: message.progress,
+      final videoPayload = message.videoPayload!;
+      content = GestureDetector(
+        onTap: (message.progress == null && !failed)
+            ? () => onPlayVideo(videoPayload.url, videoPayload.coverUrl)
+            : null,
+        child: _VideoBubbleBody(
+          payload: videoPayload,
+          progress: message.progress,
+        ),
       );
     } else if (message.type == ChatMsgType.file &&
         message.filePayload != null) {
-      content = _FileBubbleBody(
-        payload: message.filePayload!,
-        progress: message.progress,
+      // 上传中禁止点击；下载中由 _openFileMessage 内部去重
+      content = GestureDetector(
+        onTap: (message.progress == null && !failed)
+            ? () => onOpenFile(message)
+            : null,
+        child: _FileBubbleBody(
+          payload: message.filePayload!,
+          progress: message.progress,
+          downloadProgress: fileDownloadProgress[message.key],
+        ),
       );
     } else {
       content = Text(
@@ -1487,6 +1674,10 @@ class _MessageItem extends StatelessWidget {
     }
 
     final isVoice = message.type == ChatMsgType.voice;
+    // 表情/图片/视频为 plain 气泡（对齐 H5）：不加背景色，直接透出会话背景
+    final isPlainMedia = message.type == ChatMsgType.face ||
+        message.type == ChatMsgType.image ||
+        message.type == ChatMsgType.video;
     final bubble = GestureDetector(
       // 失败点击重试；语音消息整条气泡点击播放；正常消息长按弹菜单
       onTap: failed
@@ -1505,7 +1696,9 @@ class _MessageItem extends StatelessWidget {
                   .zero // 表情/图片/视频大图不加内边距
             : const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
         decoration: BoxDecoration(
-          color: isSelf ? AppColors.lime : colors.card,
+          color: isPlainMedia
+              ? null
+              : (isSelf ? AppColors.lime : colors.card),
           borderRadius: BorderRadius.only(
             topLeft: const Radius.circular(12),
             topRight: const Radius.circular(12),
@@ -1731,8 +1924,39 @@ bool _isLocalPath(String url) =>
     url.startsWith('file://') ||
     !url.startsWith('http');
 
+/// 图片扩展名（对齐 H5 IMAGE_FILE_EXTENSIONS）：文件消息 URL 命中则走全屏预览而非下载打开。
+const List<String> _imageFileExtensions = [
+  'bmp', 'gif', 'jpeg', 'jpg', 'png', 'webp',
+];
+
+/// URL 是否指向图片（按路径后缀判断，忽略 query/fragment）。
+bool _isImageFileUrl(String url) {
+  final path = url.toLowerCase().split('#').first.split('?').first;
+  return _imageFileExtensions.any(path.endsWith);
+}
+
+/// 相对路径拼接 CDN 域名（对齐 H5 staticUrl；完整 URL 原样返回）。
+String _staticUrl(String url) {
+  var u = normalizeFaceUrl(url);
+  if (u.isEmpty || u.startsWith('http')) return u;
+  return '${ApiClient.baseUrl}${u.startsWith('/') ? '' : '/'}$u';
+}
+
+/// 文件大小格式化（对齐 H5 formatFileSize：/1024 进制 + 两位小数）。
+String _formatFileSize(int size) {
+  if (size <= 0) return '';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  var s = size.toDouble();
+  var i = 0;
+  while (s >= 1024 && i < units.length - 1) {
+    s /= 1024;
+    i++;
+  }
+  return i == 0 ? '${size}B' : '${s.toStringAsFixed(2)}${units[i]}';
+}
+
 /// 图片气泡体：等比显示（最大边 ~200），本地路径用 Image.file，远程用 Image.network；
-/// 上传中覆盖进度条。
+/// 上传中覆盖进度条。列表取图顺序 thumbnailUrl || url（缩略图优先省流量）。
 class _ImageBubbleBody extends StatelessWidget {
   final ImagePayload payload;
   final double? progress;
@@ -1753,7 +1977,10 @@ class _ImageBubbleBody extends StatelessWidget {
       w = w * 200 / h;
       h = 200;
     }
-    final url = normalizeFaceUrl(payload.url);
+    // 缩略图优先（对齐 H5 getImageUrl：thumbnailUrl || url）
+    final url = normalizeFaceUrl(
+      payload.thumbnailUrl.isNotEmpty ? payload.thumbnailUrl : payload.url,
+    );
     final img = _isLocalPath(url)
         ? Image.file(File(url), fit: BoxFit.cover)
         : Image.network(url, fit: BoxFit.cover, errorBuilder: (_, _, _) {
@@ -1857,24 +2084,42 @@ class _VideoBubbleBody extends StatelessWidget {
   }
 }
 
-/// 文件气泡体：文件图标 + 文件名 + 大小；上传中底部进度条。
+/// 文件气泡体：文件图标 + 文件名 + 大小 + 底部状态行（点击查看文件 /
+/// 上传中 xx% / 下载中 xx%，对齐 H5 文件卡片）；进度条上传/下载复用。
 class _FileBubbleBody extends StatelessWidget {
   final FilePayload payload;
+
+  /// 上传进度（null=非上传中）。
   final double? progress;
 
-  const _FileBubbleBody({required this.payload, required this.progress});
+  /// 下载进度（null=非下载中）。
+  final double? downloadProgress;
 
-  String get _sizeText {
-    final s = payload.size;
-    if (s <= 0) return '';
-    if (s < 1024) return '${s}B';
-    if (s < 1024 * 1024) return '${(s / 1024).toStringAsFixed(1)}KB';
-    return '${(s / 1024 / 1024).toStringAsFixed(1)}MB';
-  }
+  const _FileBubbleBody({
+    required this.payload,
+    required this.progress,
+    required this.downloadProgress,
+  });
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
+    final uploading = progress != null;
+    final downloading = downloadProgress != null;
+    // 底部状态文案（对齐 H5：点击查看文件 / 上传中 xx%）
+    final String statusText;
+    if (uploading) {
+      statusText = '上传中 ${(progress! * 100).round()}%';
+    } else if (downloading) {
+      statusText = '下载中 ${(downloadProgress! * 100).round()}%';
+    } else {
+      statusText = '点击查看文件';
+    }
+    final barValue = uploading
+        ? progress!.clamp(0.0, 1.0)
+        : downloading
+            ? downloadProgress!.clamp(0.0, 1.0)
+            : null;
     return SizedBox(
       width: 240,
       child: Column(
@@ -1909,7 +2154,7 @@ class _FileBubbleBody extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      _sizeText,
+                      _formatFileSize(payload.size),
                       style: TextStyle(fontSize: 11, color: colors.muted),
                     ),
                   ],
@@ -1917,16 +2162,35 @@ class _FileBubbleBody extends StatelessWidget {
               ),
             ],
           ),
-          if (progress != null) ...[
-            const SizedBox(height: 10),
-            LinearProgressIndicator(
-              value: progress!.clamp(0.0, 1.0),
-              minHeight: 3,
-              backgroundColor: colors.divider,
-              valueColor:
-                  const AlwaysStoppedAnimation<Color>(AppColors.lime),
+          const SizedBox(height: 8),
+          // 底部状态行：分隔线 + 文案（+进度条）
+          Container(
+            decoration: BoxDecoration(
+              border: Border(
+                top: BorderSide(color: colors.divider, width: 0.5),
+              ),
             ),
-          ],
+            padding: const EdgeInsets.only(top: 6),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  statusText,
+                  style: TextStyle(fontSize: 11, color: colors.muted),
+                ),
+                if (barValue != null) ...[
+                  const SizedBox(height: 4),
+                  LinearProgressIndicator(
+                    value: barValue,
+                    minHeight: 3,
+                    backgroundColor: colors.divider,
+                    valueColor:
+                        const AlwaysStoppedAnimation<Color>(AppColors.lime),
+                  ),
+                ],
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -1946,4 +2210,282 @@ Widget _buildProgressOverlay(double progress) {
       valueColor: const AlwaysStoppedAnimation<Color>(AppColors.lime),
     ),
   );
+}
+
+/// 图片全屏预览页（对齐 H5 uni.previewImage：双指缩放/双击放大/拖动）。
+class _ImageViewerPage extends StatelessWidget {
+  final String url;
+
+  const _ImageViewerPage({required this.url});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: PhotoView(
+              imageProvider: NetworkImage(url),
+              backgroundDecoration: const BoxDecoration(color: Colors.black),
+              minScale: PhotoViewComputedScale.contained,
+              maxScale: PhotoViewComputedScale.covered * 4,
+              loadingBuilder: (_, _) => const Center(
+                child: CircularProgressIndicator(color: AppColors.lime),
+              ),
+              errorBuilder: (_, _, _) => const Center(
+                child: Text('图片加载失败', style: TextStyle(color: Colors.white70)),
+              ),
+            ),
+          ),
+          // 顶部关闭按钮（状态栏安全区）
+          Positioned(
+            top: 0,
+            right: 0,
+            child: SafeArea(
+              child: IconButton(
+                icon: const Icon(Icons.close, color: Colors.white, size: 26),
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 视频全屏播放页（对齐 H5 <video controls> 体验：播放/暂停/进度条/时长）。
+/// 点击画面切换控制层显隐；播放完成显示重播。
+class _VideoPlayerPage extends StatefulWidget {
+  final String url;
+  final String coverUrl;
+
+  const _VideoPlayerPage({required this.url, this.coverUrl = ''});
+
+  @override
+  State<_VideoPlayerPage> createState() => _VideoPlayerPageState();
+}
+
+class _VideoPlayerPageState extends State<_VideoPlayerPage> {
+  VideoPlayerController? _ctrl;
+  bool _initialized = false;
+  bool _error = false;
+  bool _controlsVisible = true;
+  Timer? _hideTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _init();
+  }
+
+  Future<void> _init() async {
+    final ctrl = VideoPlayerController.networkUrl(Uri.parse(widget.url));
+    _ctrl = ctrl;
+    try {
+      await ctrl.initialize();
+      if (!mounted) return;
+      setState(() => _initialized = true);
+      ctrl.addListener(_onUpdate);
+      // 等首帧布局完成后再播放：AVPlayer 层若以初始 0 尺寸布局，
+      // 视频会先渲染在左上角一小块，直到下一次布局才恢复
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) ctrl.play();
+      });
+      _scheduleHide();
+    } catch (_) {
+      if (mounted) setState(() => _error = true);
+    }
+  }
+
+  void _onUpdate() {
+    if (_ctrl == null || !mounted) return;
+    setState(() {}); // 进度/播放状态变化刷新
+    if (_ctrl!.value.position >= _ctrl!.value.duration) {
+      _cancelHide();
+    }
+  }
+
+  void _scheduleHide() {
+    _cancelHide();
+    _hideTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _controlsVisible = false);
+    });
+  }
+
+  void _cancelHide() {
+    _hideTimer?.cancel();
+    _hideTimer = null;
+  }
+
+  void _togglePlay() {
+    final ctrl = _ctrl;
+    if (ctrl == null || !_initialized) return;
+    if (ctrl.value.isPlaying) {
+      ctrl.pause();
+      _cancelHide();
+    } else {
+      // 播放结束后再点播放 → 从头重播
+      if (ctrl.value.position >= ctrl.value.duration) {
+        ctrl.seekTo(Duration.zero);
+      }
+      ctrl.play();
+      _scheduleHide();
+    }
+    setState(() => _controlsVisible = true);
+  }
+
+  void _toggleControls() {
+    setState(() => _controlsVisible = !_controlsVisible);
+    if (_controlsVisible) {
+      _scheduleHide();
+    } else {
+      _cancelHide();
+    }
+  }
+
+  String _fmt(Duration d) {
+    final s = d.inSeconds;
+    return '${s ~/ 60}:${(s % 60).toString().padLeft(2, '0')}';
+  }
+
+  @override
+  void dispose() {
+    _cancelHide();
+    _ctrl?.removeListener(_onUpdate);
+    _ctrl?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ctrl = _ctrl;
+    final value = ctrl?.value;
+    final isPlaying = value?.isPlaying ?? false;
+    final pos = value?.position ?? Duration.zero;
+    final dur = value?.duration ?? Duration.zero;
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          // 画面：初始化前显示封面/加载中，完成后等比居中显示。
+          // 视频本体只保留 Center→AspectRatio→VideoPlayer 标准结构，
+          // 不包裹 GestureDetector/ClipRect（iOS 平台视图与裁剪/代理层
+          // 组合会导致视频渲染在左上角小块）
+          _initialized && ctrl != null
+              ? Center(
+                  child: AspectRatio(
+                    aspectRatio: ctrl.value.aspectRatio,
+                    child: VideoPlayer(ctrl),
+                  ),
+                )
+              : _buildCoverOrLoading(),
+          // 透明点击层：独立覆盖层切换控制层显隐
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _toggleControls,
+          ),
+          if (!_error) ...[
+            // 中央播放/暂停大按钮
+            if (_controlsVisible)
+              Center(
+                child: GestureDetector(
+                  onTap: _togglePlay,
+                  child: Container(
+                    width: 64,
+                    height: 64,
+                    decoration: BoxDecoration(
+                      color: Colors.black45,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      isPlaying ? Icons.pause : Icons.play_arrow,
+                      size: 40,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ),
+            // 顶部关闭
+            Positioned(
+              top: 0,
+              left: 0,
+              child: SafeArea(
+                child: IconButton(
+                  icon: const Icon(Icons.close, color: Colors.white, size: 26),
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+              ),
+            ),
+            // 底部进度条 + 时间
+            if (_controlsVisible && _initialized)
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: _buildBottomBar(pos, dur),
+              ),
+          ],
+          if (_error)
+            const Center(
+              child: Text('视频加载失败', style: TextStyle(color: Colors.white70)),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// 初始化前的封面/加载态。
+  Widget _buildCoverOrLoading() {
+    if (widget.coverUrl.isNotEmpty) {
+      return Center(
+        child: Image.network(
+          normalizeFaceUrl(widget.coverUrl),
+          fit: BoxFit.contain,
+          // 封面加载失败时显示加载圈（视频本身仍在初始化）
+          errorBuilder: (_, _, _) => const CircularProgressIndicator(
+            color: AppColors.lime,
+          ),
+        ),
+      );
+    }
+    return const Center(
+      child: CircularProgressIndicator(color: AppColors.lime),
+    );
+  }
+
+  Widget _buildBottomBar(Duration pos, Duration dur) {
+    final ctrl = _ctrl!;
+    // 不用 Row+Slider（M3 Slider 有最小宽度约束会溢出），
+    // 改用 video_player 自带进度条：自带拖动 seek（allowScrubbing）
+    return SafeArea(
+      top: false,
+      child: Container(
+        color: Colors.black45,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            VideoProgressIndicator(
+              ctrl,
+              allowScrubbing: true,
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+              colors: const VideoProgressColors(
+                playedColor: AppColors.lime,
+                bufferedColor: Colors.white24,
+                backgroundColor: Colors.white12,
+              ),
+            ),
+            Text(
+              '${_fmt(pos)} / ${_fmt(dur)}',
+              style: const TextStyle(color: Colors.white, fontSize: 12),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

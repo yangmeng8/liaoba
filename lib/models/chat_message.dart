@@ -51,12 +51,16 @@ class VoicePayload {
 /// 图片消息 content 结构。
 class ImagePayload {
   final String url;
+
+  /// 缩略图（列表优先显示省流量，点开看原图；可能为空）。
+  final String thumbnailUrl;
   final int width;
   final int height;
   final int size;
 
   const ImagePayload({
     required this.url,
+    this.thumbnailUrl = '',
     this.width = 0,
     this.height = 0,
     this.size = 0,
@@ -64,6 +68,7 @@ class ImagePayload {
 
   factory ImagePayload.fromJson(Map<String, dynamic> json) => ImagePayload(
     url: asString(json['url']),
+    thumbnailUrl: asString(json['thumbnailUrl']),
     width: asInt(json['width']),
     height: asInt(json['height']),
     size: asInt(json['size']),
@@ -71,6 +76,7 @@ class ImagePayload {
 
   Map<String, dynamic> toJson() => {
     'url': url,
+    'thumbnailUrl': thumbnailUrl,
     'width': width,
     'height': height,
     'size': size,
