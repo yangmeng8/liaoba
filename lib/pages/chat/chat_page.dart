@@ -19,6 +19,7 @@ import 'package:video_thumbnail/video_thumbnail.dart';
 import '../../models/chat_message.dart';
 import '../../models/im_conversation.dart';
 import '../../models/im_face.dart';
+import '../../models/im_message.dart';
 import '../../models/im_ws_frame.dart';
 import '../../services/api_client.dart';
 import '../../services/auth_api.dart';
@@ -245,6 +246,20 @@ class _ChatPageState extends State<ChatPage> {
     return '用户${m.senderId}';
   }
 
+  /// 系统提示人名解析（对齐 H5 getSenderDisplayName：
+  /// 好友备注 > 群昵称 > 自己昵称 > '用户N'；渲染时实时查缓存）。
+  String _resolveUserName(int userId) {
+    final f = _friends[userId];
+    if (f != null && f.shownName.isNotEmpty) return f.shownName;
+    final gm = _groupMembers[userId];
+    if (gm != null && gm.nickname.isNotEmpty) return gm.nickname;
+    if (userId == (AuthManager.instance.userId ?? 0)) {
+      final n = AuthManager.instance.nickname;
+      if (n != null && n.isNotEmpty) return n;
+    }
+    return '用户$userId';
+  }
+
   @override
   void dispose() {
     _wsSub?.cancel();
@@ -299,6 +314,8 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   /// 按会话类型分流查询（对应 H5 queryMessages）。
+  /// RECALL(2101) 信号消息不渲染——原消息 status 已改为撤回态，
+  /// 由原消息自身渲染「撤回了一条消息」提示。
   Future<List<ChatMessage>> _query({int? maxId}) async {
     if (_isPrivate) {
       final list = await ImApi.getPrivateMessageList(
@@ -306,7 +323,10 @@ class _ChatPageState extends State<ChatPage> {
         limit: _pageSize,
         maxId: maxId,
       );
-      return list.map(ChatMessage.fromPrivate).toList();
+      return list
+          .map(ChatMessage.fromPrivate)
+          .where((m) => m.type != ChatMsgType.recallSignal)
+          .toList();
     }
     if (_isGroup) {
       final list = await ImApi.getGroupMessageList(
@@ -314,7 +334,10 @@ class _ChatPageState extends State<ChatPage> {
         limit: _pageSize,
         maxId: maxId,
       );
-      return list.map(ChatMessage.fromGroup).toList();
+      return list
+          .map(ChatMessage.fromGroup)
+          .where((m) => m.type != ChatMsgType.recallSignal)
+          .toList();
     }
     // 频道：无服务端 list 接口，读 pull 全量缓存后内存分页
     final all = await _ensureChannelAll();
@@ -1594,6 +1617,7 @@ class _ChatPageState extends State<ChatPage> {
           onOpenFile: _openFileMessage,
           onRetry: () => _retryMessage(message),
           onRecall: () => _recall(message),
+          nameResolver: _resolveUserName,
         );
       },
     );
@@ -1976,6 +2000,9 @@ class _MessageItem extends StatelessWidget {
   final VoidCallback onRetry;
   final VoidCallback onRecall;
 
+  /// 系统提示人名解析（群广播事件 mention 渲染用）。
+  final String Function(int userId) nameResolver;
+
   const _MessageItem({
     required this.message,
     required this.older,
@@ -2003,6 +2030,7 @@ class _MessageItem extends StatelessWidget {
     required this.onOpenFile,
     required this.onRetry,
     required this.onRecall,
+    required this.nameResolver,
   });
 
   /// 与更旧一条间隔超过 5 分钟才显示时间分隔。
@@ -2034,9 +2062,11 @@ class _MessageItem extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 6),
           child: Center(
-            child: Text(
-              message.displayText,
-              style: TextStyle(fontSize: 12, color: colors.muted),
+            child: _SystemTipText(
+              message: message,
+              nameResolver: nameResolver,
+              colors: colors,
+              dark: Theme.of(context).brightness == Brightness.dark,
             ),
           ),
         )
@@ -2064,9 +2094,51 @@ class _MessageItem extends StatelessWidget {
       );
     }
 
-    // 气泡内容按消息类型分发：语音条 / 表情大图 / 图片 / 视频 / 文件 / 文本
+    // 气泡内容按消息类型分发：私聊通话记录 / 语音条 / 表情大图 / 图片 / 视频 / 文件 / 文本
     Widget content;
-    if (message.type == ChatMsgType.voice && message.voicePayload != null) {
+    if (message.isPrivateRtcCallEnd) {
+      // 私聊通话结束：电话气泡（phone 图标 + 视角文案），点击重拨
+      //（多选模式点击切换选中，不重拨——对齐 H5 onRtcRedial 的 selectMode 判断）
+      final rtc = message.rtcCallPayload!;
+      content = GestureDetector(
+        onTap: selectionMode
+            ? null
+            : () {
+                ScaffoldMessenger.of(context)
+                  ..hideCurrentSnackBar()
+                  ..showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        rtc.isVideo ? '视频通话功能建设中，敬请期待' : '语音通话功能建设中，敬请期待',
+                      ),
+                    ),
+                  );
+              },
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              rtc.isVideo ? Icons.videocam_outlined : Icons.call,
+              size: 17,
+              color: isSelf ? Colors.black : colors.muted,
+            ),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                rtc.privateBubbleText(AuthManager.instance.userId ?? 0),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                // 与普通文本气泡同口径：自己绿底黑字，对方跟主题正文色
+                style: TextStyle(
+                  fontSize: 13,
+                  color: isSelf ? Colors.black : colors.text,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    } else if (message.type == ChatMsgType.voice && message.voicePayload != null) {
       // 渲染即后台预热缓存（内部去重），点击时命中即秒播
       final vUrl = normalizeFaceUrl(message.voicePayload!.url);
       if (vUrl.isNotEmpty) onPrefetchVoice(vUrl);
@@ -3716,6 +3788,75 @@ class _ReadReceiptSheetState extends State<_ReadReceiptSheet> {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// 居中系统提示（对齐 H5 MessageTipSegments）：
+/// 撤回提示 / 群广播事件 / 好友关系事件 / 群通话 tip。
+/// 人名片段高亮显示（mention），文案由运行时名字解析生成。
+class _SystemTipText extends StatelessWidget {
+  final ChatMessage message;
+  final String Function(int userId) nameResolver;
+  final ThemeColors colors;
+  final bool dark;
+
+  const _SystemTipText({
+    required this.message,
+    required this.nameResolver,
+    required this.colors,
+    required this.dark,
+  });
+
+  /// 分段文案（对齐 H5 各 resolve*Segments 函数）。
+  List<TipSegment> _buildSegments() {
+    // 撤回的原消息：自己「你撤回了一条消息」，他人「xx 撤回了一条消息」
+    if (message.recalled) {
+      if (message.isSelf) return [TipSegment.text('你撤回了一条消息')];
+      return [
+        TipSegment.mention(message.senderId, nameResolver(message.senderId)),
+        TipSegment.text(' 撤回了一条消息'),
+      ];
+    }
+    // 群广播事件：22 种结构化文案（名字运行时解析）
+    if (isGroupNotificationType(message.type)) {
+      final segments = resolveGroupNotificationSegments(
+        message.type,
+        parseGroupNotificationPayload(message.content),
+        nameResolver,
+      );
+      if (segments.isNotEmpty) return segments;
+      return [TipSegment.text('[群通知]')];
+    }
+    // 好友关系事件
+    if (message.type == ChatMsgType.friendAdded ||
+        message.type == ChatMsgType.friendDeleted) {
+      final segments = resolveFriendNotificationSegments(message.type);
+      if (segments.isNotEmpty) return segments;
+    }
+    // 其余（群 RTC tip / 撤回信号兜底等）：纯文本
+    return [TipSegment.text(message.displayText)];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final segments = _buildSegments();
+    // 人名高亮蓝（微信链接色；深色主题用亮一档）
+    final mentionColor = dark ? const Color(0xFF7D90B0) : const Color(0xFF576B95);
+    return Text.rich(
+      TextSpan(
+        style: TextStyle(fontSize: 12, color: colors.muted, height: 1.4),
+        children: [
+          for (final s in segments)
+            TextSpan(
+              text: s.text,
+              style: s.isMention
+                  ? TextStyle(color: mentionColor)
+                  : null,
+            ),
+        ],
+      ),
+      textAlign: TextAlign.center,
     );
   }
 }

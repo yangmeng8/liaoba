@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:math';
 
+import '../models/im_conversation.dart';
 import '../models/im_message.dart';
 import '../services/auth_manager.dart';
 import '../shared/json_utils.dart';
@@ -31,6 +32,18 @@ class ChatMsgType {
 
   /// 好友添加通知（系统消息）。
   static const int friendAdded = 1204;
+
+  /// 好友删除通知（系统消息）。
+  static const int friendDeleted = 1205;
+
+  /// 撤回信号消息：content = {messageId} 指向原消息，本身不渲染。
+  static const int recallSignal = 2101;
+
+  /// 通话开始系统消息（1610，仅群聊落库）。
+  static const int rtcCallStart = 1610;
+
+  /// 通话结束系统消息（1611，私聊/群聊均落库）。
+  static const int rtcCallEnd = 1611;
 }
 
 /// 语音消息 content 结构。
@@ -295,6 +308,9 @@ class ChatMessage {
   /// 群聊已读人数（仅群消息）。
   final int readCount;
 
+  /// 是否已被撤回（服务端消息 status=2；渲染成居中灰条）。
+  final bool recalled;
+
   /// 是否自己发送（决定气泡左右方向）。
   final bool isSelf;
 
@@ -309,6 +325,7 @@ class ChatMessage {
     this.progress,
     this.receiptStatus = 0,
     this.readCount = 0,
+    this.recalled = false,
     required this.isSelf,
   });
 
@@ -320,6 +337,7 @@ class ChatMessage {
     type: m.type,
     content: m.content,
     sendTime: m.sendTime,
+    recalled: m.isRecalled,
     isSelf: m.isSelf,
   );
 
@@ -333,6 +351,7 @@ class ChatMessage {
     sendTime: m.sendTime,
     receiptStatus: m.receiptStatus,
     readCount: m.readCount,
+    recalled: m.isRecalled,
     isSelf: m.isSelf,
   );
 
@@ -564,6 +583,7 @@ class ChatMessage {
   bool get operable =>
       id != null &&
       status == ChatMessageStatus.sent &&
+      !recalled &&
       (type == ChatMsgType.text ||
           type == ChatMsgType.image ||
           type == ChatMsgType.voice ||
@@ -574,13 +594,18 @@ class ChatMessage {
   /// 是否可撤回：自己的消息 + 发送时间在撤回窗口内（对齐 H5 2 分钟窗口）。
   bool canRecall({Duration window = const Duration(minutes: 2)}) {
     if (id == null || !isSelf || status != ChatMessageStatus.sent) return false;
+    if (recalled) return false; // 已撤回的不可重复撤回
     final t = sendTime;
     if (t == null) return false;
     return DateTime.now().difference(t) <= window;
   }
 
-  /// 展示文本：文本消息取内层文本；系统/群事件等非文本类型给友好文案。
+  /// 展示文本：文本消息取内层文本；系统/群事件等非文本类型给友好文案
+  /// （群广播事件人名以「用户N」兜底，聊天室内富文本渲染时用真实名）。
   String get displayText {
+    if (recalled) {
+      return isSelf ? '你撤回了一条消息' : '[消息已撤回]';
+    }
     switch (type) {
       case ChatMsgType.text:
         return extractTextContent(content);
@@ -594,25 +619,80 @@ class ChatMessage {
         return '[文件]';
       case ChatMsgType.face:
         return '[表情]';
+      case ChatMsgType.rtcCallStart:
+      case ChatMsgType.rtcCallEnd:
+        // 通话消息：按会话类型给摘要（私聊 [语音通话] / 群聊 tip 文案）
+        final p = rtcCallPayload;
+        if (p == null) return '[通话]';
+        return resolveRtcCallLastContent(
+          type,
+          content,
+          p.conversationType,
+        );
       case ChatMsgType.friendAdded:
-        return '我们已成为好友，开始聊天吧';
+        return '你们已经是好友了，开始聊天吧';
+      case ChatMsgType.friendDeleted:
+        return '你已删除好友';
       default:
-        // 15xx 群事件、125 频道素材等：非聊天主体消息
+        // 群广播事件：结构化文案（纯文本口径）
+        if (isGroupNotificationType(type)) {
+          final text = segmentsToText(
+            resolveGroupNotificationSegments(
+              type,
+              parseGroupNotificationPayload(content),
+              (userId) => '用户$userId',
+            ),
+          );
+          return text.isNotEmpty ? text : '[群通知]';
+        }
+        if (type == ChatMsgType.recallSignal) return '[消息已撤回]';
+        // 125 频道素材等：非聊天主体消息
         return '[暂不支持的消息类型]';
     }
   }
 
-  /// 是否为居中灰字展示的系统类消息（好友通知、群事件等）。
-  bool get isCenteredNotice =>
-      !isSelf &&
-      type != ChatMsgType.text &&
-      type != ChatMsgType.voice &&
-      type != ChatMsgType.image &&
-      type != ChatMsgType.video &&
-      type != ChatMsgType.file &&
-      type != ChatMsgType.face &&
-      status == ChatMessageStatus.sent &&
-      senderId != 0; // 频道素材仍走气泡
+  /// RTC 通话消息 content 解析（1610/1611）；非 RTC 消息返回 null。
+  RtcCallPayload? get rtcCallPayload {
+    if (type != ChatMsgType.rtcCallStart && type != ChatMsgType.rtcCallEnd) {
+      return null;
+    }
+    return parseRtcCallPayload(content);
+  }
+
+  /// 是否私聊通话结束消息（渲染成电话气泡，点击可重拨；
+  /// 对应 H5 privateRtcCallPayload 判定）。
+  bool get isPrivateRtcCallEnd =>
+      type == ChatMsgType.rtcCallEnd &&
+      rtcCallPayload?.conversationType == ImConversationType.private.value;
+
+  /// 是否为居中灰字展示的系统类消息（撤回提示、好友通知、群广播事件、
+  /// 群通话 tip 等）。注意：撤回/群事件无论是否自己操作都居中。
+  bool get isCenteredNotice {
+    if (status != ChatMessageStatus.sent) return false;
+    // 撤回的原消息：居中「你/xx 撤回了一条消息」
+    if (recalled) return true;
+    // RTC：群聊居中（senderId=发起人），私聊结束走电话气泡
+    if (type == ChatMsgType.rtcCallStart || type == ChatMsgType.rtcCallEnd) {
+      return !isPrivateRtcCallEnd;
+    }
+    // 群广播事件：居中（自己操作的也显示）
+    if (isGroupNotificationType(type)) return true;
+    // 好友关系事件 / 撤回信号（信号正常会被过滤，兜底居中）
+    if (type == ChatMsgType.friendAdded ||
+        type == ChatMsgType.friendDeleted ||
+        type == ChatMsgType.recallSignal) {
+      return true;
+    }
+    // 频道素材等：非聊天主体消息仍走气泡
+    return !isSelf &&
+        type != ChatMsgType.text &&
+        type != ChatMsgType.voice &&
+        type != ChatMsgType.image &&
+        type != ChatMsgType.video &&
+        type != ChatMsgType.file &&
+        type != ChatMsgType.face &&
+        senderId != 0;
+  }
 }
 
 /// 生成客户端消息编号（幂等键）：32 位随机 hex，对齐服务端样例格式。
