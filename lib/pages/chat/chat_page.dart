@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
@@ -34,6 +35,7 @@ import '../../shared/json_utils.dart';
 import '../../stores/conversation_store.dart';
 import 'face_picker_sheet.dart';
 import 'hold_to_talk_button.dart';
+import '../contacts/user_profile_page.dart';
 
 /// 聊天页（对应 H5 MessagePanel）：
 /// - 首屏 maxId=null 拉最新一页；reverse ListView 向上滚动 maxId 游标翻页
@@ -258,6 +260,22 @@ class _ChatPageState extends State<ChatPage> {
       if (n != null && n.isNotEmpty) return n;
     }
     return '用户$userId';
+  }
+
+  /// 打开用户资料页（对齐 H5 handleAvatarClick）：
+  /// 头像 / 系统提示 @人名共用；@所有人(-1) 与系统(0)拦截；
+  /// 群聊入口带 source=2+群名（好友申请来源上下文），私聊入口 source=1。
+  void _openUserProfile(int userId) {
+    if (userId <= 0) return; // @所有人 / 频道广播 / 系统消息
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => UserProfilePage(
+          userId: userId,
+          addSource: _isGroup ? 2 : 1,
+          sourceExtra: _isGroup ? widget.title : '',
+        ),
+      ),
+    );
   }
 
   @override
@@ -1618,6 +1636,7 @@ class _ChatPageState extends State<ChatPage> {
           onRetry: () => _retryMessage(message),
           onRecall: () => _recall(message),
           nameResolver: _resolveUserName,
+          onOpenProfile: _openUserProfile,
         );
       },
     );
@@ -2003,6 +2022,9 @@ class _MessageItem extends StatelessWidget {
   /// 系统提示人名解析（群广播事件 mention 渲染用）。
   final String Function(int userId) nameResolver;
 
+  /// 点击头像 / 系统提示 @人名 → 跳用户资料页。
+  final ValueChanged<int> onOpenProfile;
+
   const _MessageItem({
     required this.message,
     required this.older,
@@ -2031,6 +2053,7 @@ class _MessageItem extends StatelessWidget {
     required this.onRetry,
     required this.onRecall,
     required this.nameResolver,
+    required this.onOpenProfile,
   });
 
   /// 与更旧一条间隔超过 5 分钟才显示时间分隔。
@@ -2067,6 +2090,7 @@ class _MessageItem extends StatelessWidget {
               nameResolver: nameResolver,
               colors: colors,
               dark: Theme.of(context).brightness == Brightness.dark,
+              onMentionTap: onOpenProfile,
             ),
           ),
         )
@@ -2303,7 +2327,10 @@ class _MessageItem extends StatelessWidget {
                   : null,
             ),
           )
-        : ImAvatar(src: avatarUrl, name: avatarName, size: 40);
+        : GestureDetector(
+            onTap: () => onOpenProfile(message.senderId),
+            child: ImAvatar(src: avatarUrl, name: avatarName, size: 40),
+          );
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
@@ -3794,18 +3821,22 @@ class _ReadReceiptSheetState extends State<_ReadReceiptSheet> {
 
 /// 居中系统提示（对齐 H5 MessageTipSegments）：
 /// 撤回提示 / 群广播事件 / 好友关系事件 / 群通话 tip。
-/// 人名片段高亮显示（mention），文案由运行时名字解析生成。
+/// 人名片段高亮显示（mention），点击跳用户资料页（对齐 H5 mention-click）。
 class _SystemTipText extends StatelessWidget {
   final ChatMessage message;
   final String Function(int userId) nameResolver;
   final ThemeColors colors;
   final bool dark;
 
+  /// 点击人名回调（跳用户资料页）。
+  final ValueChanged<int> onMentionTap;
+
   const _SystemTipText({
     required this.message,
     required this.nameResolver,
     required this.colors,
     required this.dark,
+    required this.onMentionTap,
   });
 
   /// 分段文案（对齐 H5 各 resolve*Segments 函数）。
@@ -3852,6 +3883,10 @@ class _SystemTipText extends StatelessWidget {
               text: s.text,
               style: s.isMention
                   ? TextStyle(color: mentionColor)
+                  : null,
+              recognizer: s.isMention && s.userId != null
+                  ? (TapGestureRecognizer()
+                    ..onTap = () => onMentionTap(s.userId!))
                   : null,
             ),
         ],

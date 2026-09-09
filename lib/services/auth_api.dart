@@ -136,4 +136,51 @@ class AuthApi {
       );
     }
   }
+
+  /// 获得用户精简资料（昵称/头像/性别/部门；点头像弹资料页场景，免鉴权）。
+  static Future<SimpleUser?> getSimpleUser(int id) async {
+    final resp = await ApiClient.dio.get(
+      '/admin-api/system/user/get-simple',
+      queryParameters: {'id': id},
+    );
+    final data = ApiClient.unwrap(resp);
+    if (data is! Map<String, dynamic>) return null;
+    return SimpleUser.fromJson(data);
+  }
+}
+
+/// 用户精简资料（对应后端 UserSimpleRespVO）。
+class SimpleUser {
+  final int id;
+  final String nickname;
+  final String avatar;
+
+  /// 性别（1=男 2=女；0 未设置）。
+  final int sex;
+  final String deptName;
+
+  const SimpleUser({
+    required this.id,
+    required this.nickname,
+    required this.avatar,
+    this.sex = 0,
+    this.deptName = '',
+  });
+
+  factory SimpleUser.fromJson(Map<String, dynamic> json) => SimpleUser(
+    id: json['id'] is int
+        ? json['id'] as int
+        : int.tryParse('${json['id']}') ?? 0,
+    nickname: (json['nickname'] ?? '').toString(),
+    avatar: (json['avatar'] ?? '').toString(),
+    sex: json['sex'] is int ? json['sex'] as int : int.tryParse('${json['sex']}') ?? 0,
+    deptName: (json['deptName'] ?? '').toString(),
+  );
+
+  /// 性别文案（0 未设置返回空）。
+  String get sexLabel => switch (sex) {
+    1 => '男',
+    2 => '女',
+    _ => '',
+  };
 }

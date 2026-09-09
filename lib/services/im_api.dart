@@ -365,4 +365,69 @@ class ImApi {
       queryParameters: {'id': id},
     );
   }
+
+  /// 获得好友详情（备注/来源/拉黑/添加时间）。
+  static Future<ImFriend?> getFriendDetail({required int friendUserId}) async {
+    final resp = await ApiClient.dio.get(
+      '/admin-api/im/friend/get',
+      queryParameters: {'friendUserId': friendUserId},
+    );
+    final data = ApiClient.unwrap(resp);
+    if (data is! Map<String, dynamic>) return null;
+    return ImFriend.fromJson(data);
+  }
+
+  /// 更新好友备注（仅自己可见；displayName 传空串表示清空）。
+  static Future<void> updateFriendRemark({
+    required int friendUserId,
+    required String displayName,
+  }) async {
+    await ApiClient.dio.put(
+      '/admin-api/im/friend/update',
+      data: {'friendUserId': friendUserId, 'displayName': displayName},
+    );
+  }
+
+  /// 拉黑好友（必须先是好友；单边屏蔽对方私聊消息）。
+  static Future<void> blockFriend({required int friendUserId}) async {
+    await ApiClient.dio.put(
+      '/admin-api/im/friend/block',
+      queryParameters: {'friendUserId': friendUserId},
+    );
+  }
+
+  /// 移出黑名单。
+  static Future<void> unblockFriend({required int friendUserId}) async {
+    await ApiClient.dio.put(
+      '/admin-api/im/friend/unblock',
+      queryParameters: {'friendUserId': friendUserId},
+    );
+  }
+
+  /// 删除好友（单向软删除；clear=true 级联清理本端私聊会话）。
+  static Future<void> deleteFriend({
+    required int friendUserId,
+    bool clear = true,
+  }) async {
+    await ApiClient.dio.delete(
+      '/admin-api/im/friend/delete',
+      queryParameters: {'friendUserId': friendUserId, 'clear': clear},
+    );
+  }
+
+  /// 发起好友申请（source：1=搜索 2=群聊 3=扫码 4=名片）。
+  static Future<void> applyFriendRequest({
+    required int toUserId,
+    String applyContent = '',
+    int addSource = 1,
+  }) async {
+    await ApiClient.dio.post(
+      '/admin-api/im/friend-request/apply',
+      data: {
+        'toUserId': toUserId,
+        'applyContent': applyContent,
+        'addSource': addSource,
+      },
+    );
+  }
 }

@@ -30,6 +30,12 @@ class ImFriend {
   final String nickname;
   final String avatar;
 
+  /// 添加来源（1=搜索 2=群聊 3=扫码 4=名片）。
+  final int addSource;
+
+  /// 添加好友时间。
+  final DateTime? addTime;
+
   const ImFriend({
     required this.id,
     required this.friendUserId,
@@ -40,6 +46,8 @@ class ImFriend {
     required this.status,
     required this.nickname,
     required this.avatar,
+    this.addSource = 0,
+    this.addTime,
   });
 
   factory ImFriend.fromJson(Map<String, dynamic> json) {
@@ -53,12 +61,22 @@ class ImFriend {
       status: asInt(json['status']),
       nickname: asString(json['nickname']),
       avatar: asString(json['avatar']),
+      addSource: asInt(json['addSource']),
+      addTime: DateTime.tryParse(asString(json['addTime'])),
     );
   }
 
   /// 展示名：备注（仅自己可见）优先，其次好友昵称。
   String get shownName =>
       displayName.isNotEmpty ? displayName : (nickname.isNotEmpty ? nickname : '用户$friendUserId');
+
+  /// 添加来源文案。
+  String get addSourceLabel => switch (addSource) {
+    2 => '来自群聊',
+    3 => '通过扫一扫',
+    4 => '通过名片',
+    _ => '通过搜索',
+  };
 }
 
 /// 群（对应后端 GroupRespVO）。
