@@ -316,10 +316,10 @@ class _ChatPageState extends State<ChatPage> {
       _error = null;
     });
     try {
-      final list = await _query(maxId: null);
+      final result = await _query(maxId: null);
       if (!mounted) return;
-      setState(() => _messages = list);
-      if (list.length < _pageSize) _noMore = true;
+      setState(() => _messages = result.visible);
+      if (result.rawCount < _pageSize) _noMore = true;
       _maybeMarkRead();
       if (_isPrivate) _loadPeerRead();
     } catch (e) {
@@ -332,37 +332,42 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   /// 按会话类型分流查询（对应 H5 queryMessages）。
-  /// RECALL(2101) 信号消息不渲染——原消息 status 已改为撤回态，
-  /// 由原消息自身渲染「撤回了一条消息」提示。
-  Future<List<ChatMessage>> _query({int? maxId}) async {
+  /// 返回过滤 RECALL(2101) 信号后的消息（原消息 status 已改为撤回态，
+  /// 由原消息自身渲染「撤回了一条消息」提示）——注意「是否有更多」的
+  /// 判定必须用过滤前的原始条数，否则撤回多的会话会误判翻完了。
+  Future<({List<ChatMessage> visible, int rawCount})> _query({
+    int? maxId,
+  }) async {
+    List<ChatMessage> raw;
     if (_isPrivate) {
-      final list = await ImApi.getPrivateMessageList(
+      raw = (await ImApi.getPrivateMessageList(
         receiverId: widget.targetId,
         limit: _pageSize,
         maxId: maxId,
-      );
-      return list
+      ))
           .map(ChatMessage.fromPrivate)
-          .where((m) => m.type != ChatMsgType.recallSignal)
           .toList();
-    }
-    if (_isGroup) {
-      final list = await ImApi.getGroupMessageList(
+    } else if (_isGroup) {
+      raw = (await ImApi.getGroupMessageList(
         groupId: widget.targetId,
         limit: _pageSize,
         maxId: maxId,
-      );
-      return list
+      ))
           .map(ChatMessage.fromGroup)
-          .where((m) => m.type != ChatMsgType.recallSignal)
+          .toList();
+    } else {
+      // 频道：无服务端 list 接口，读 pull 全量缓存后内存分页
+      final all = await _ensureChannelAll();
+      raw = (maxId == null
+              ? all
+              : all.where((m) => (m.id ?? 0) < maxId).toList())
+          .take(_pageSize)
           .toList();
     }
-    // 频道：无服务端 list 接口，读 pull 全量缓存后内存分页
-    final all = await _ensureChannelAll();
-    final filtered = maxId == null
-        ? all
-        : all.where((m) => (m.id ?? 0) < maxId).toList();
-    return filtered.take(_pageSize).toList();
+    final visible = raw
+        .where((m) => m.type != ChatMsgType.recallSignal)
+        .toList();
+    return (visible: visible, rawCount: raw.length);
   }
 
   /// 频道消息全量缓存：循环 pull 拉全（上限 10 页，测试环境频道消息量少）。
@@ -398,15 +403,16 @@ class _ChatPageState extends State<ChatPage> {
     if (oldestId == null) return; // 全是本地占位，无服务端游标
     setState(() => _loadingMore = true);
     try {
-      final older = await _query(maxId: oldestId);
+      final result = await _query(maxId: oldestId);
       if (!mounted) return;
       setState(() {
         // 去重防御：与翻页边界/并发刷新重叠的消息不重复追加
         final existKeys = _messages.map((m) => m.key).toSet();
         _messages.addAll(
-          older.where((m) => existKeys.add(m.key)),
+          result.visible.where((m) => existKeys.add(m.key)),
         );
-        if (older.length < _pageSize) _noMore = true;
+        // 满页判定用过滤信号前的原始条数
+        if (result.rawCount < _pageSize) _noMore = true;
       });
     } catch (_) {
       // 翻页失败静默：用户可继续滚动重试
@@ -421,7 +427,7 @@ class _ChatPageState extends State<ChatPage> {
     if (_loading) return;
     final nearBottom = !_scrollCtrl.hasClients || _scrollCtrl.offset < 80;
     try {
-      final latest = await _query(maxId: null);
+      final latest = (await _query(maxId: null)).visible;
       if (!mounted) return;
       final map = <String, ChatMessage>{};
       for (final m in _messages) {
@@ -1287,26 +1293,11 @@ class _ChatPageState extends State<ChatPage> {
   /// 删光列表后补拉（以被删消息编号为游标拉取更早一页）。
   Future<void> _loadOlderAfterClear(int maxId) async {
     try {
-      final List<ChatMessage> older;
-      if (_isPrivate) {
-        final list = await ImApi.getPrivateMessageList(
-          receiverId: widget.targetId,
-          limit: _pageSize,
-          maxId: maxId,
-        );
-        older = list.map(ChatMessage.fromPrivate).toList();
-      } else {
-        final list = await ImApi.getGroupMessageList(
-          groupId: widget.targetId,
-          limit: _pageSize,
-          maxId: maxId,
-        );
-        older = list.map(ChatMessage.fromGroup).toList();
-      }
+      final result = await _query(maxId: maxId);
       if (!mounted) return;
       setState(() {
-        _messages = older;
-        _noMore = older.length < _pageSize;
+        _messages = result.visible;
+        _noMore = result.rawCount < _pageSize;
       });
     } catch (_) {
       // 静默：补拉失败保持空列表
