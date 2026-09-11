@@ -87,6 +87,196 @@ class ImApi {
         .toList();
   }
 
+  /// ==================== 群设置页接口（对应后端 ImGroupController） ====================
+
+  /// 获得群详情（含我的成员视角：joinStatus/groupRemark/silent）。
+  static Future<ImGroup> getGroup({required int id}) async {
+    final resp = await ApiClient.dio.get(
+      '/admin-api/im/group/get',
+      queryParameters: {'id': id},
+    );
+    return ImGroup.fromJson(ApiClient.unwrap(resp));
+  }
+
+  /// 更新群（名称/头像/公告/进群审批；管理员权限）。
+  static Future<void> updateGroup({
+    required int id,
+    String? name,
+    String? avatar,
+    String? notice,
+    bool? joinApproval,
+  }) async {
+    await ApiClient.dio.put(
+      '/admin-api/im/group/update',
+      data: {
+        'id': id,
+        if (name != null) 'name': name,
+        if (avatar != null) 'avatar': avatar,
+        if (notice != null) 'notice': notice,
+        if (joinApproval != null) 'joinApproval': joinApproval,
+      },
+    );
+  }
+
+  /// 解散群（仅群主）。
+  static Future<void> dissolveGroup({required int id}) async {
+    await ApiClient.dio.delete(
+      '/admin-api/im/group/dissolve',
+      queryParameters: {'id': id},
+    );
+  }
+
+  /// 邀请用户加入群。
+  static Future<void> inviteGroupMembers({
+    required int groupId,
+    required List<int> memberUserIds,
+  }) async {
+    await ApiClient.dio.post(
+      '/admin-api/im/group/invite',
+      data: {'groupId': groupId, 'memberUserIds': memberUserIds},
+    );
+  }
+
+  /// 退出群。
+  static Future<void> quitGroup({required int groupId}) async {
+    await ApiClient.dio.delete(
+      '/admin-api/im/group/quit',
+      queryParameters: {'groupId': groupId},
+    );
+  }
+
+  /// 移除群成员（管理员权限）。
+  static Future<void> kickGroupMembers({
+    required int groupId,
+    required List<int> memberUserIds,
+  }) async {
+    await ApiClient.dio.delete(
+      '/admin-api/im/group/kicking',
+      data: {'groupId': groupId, 'memberUserIds': memberUserIds},
+    );
+  }
+
+  /// 添加群管理员（仅群主）。
+  static Future<void> addGroupAdmins({
+    required int id,
+    required List<int> userIds,
+  }) async {
+    await ApiClient.dio.put(
+      '/admin-api/im/group/add-admin',
+      data: {'id': id, 'userIds': userIds},
+    );
+  }
+
+  /// 撤销群管理员（仅群主）。
+  static Future<void> removeGroupAdmins({
+    required int id,
+    required List<int> userIds,
+  }) async {
+    await ApiClient.dio.put(
+      '/admin-api/im/group/remove-admin',
+      data: {'id': id, 'userIds': userIds},
+    );
+  }
+
+  /// 转让群主（仅群主）。
+  static Future<void> transferGroupOwner({
+    required int id,
+    required int newOwnerUserId,
+  }) async {
+    await ApiClient.dio.put(
+      '/admin-api/im/group/transfer-owner',
+      data: {'id': id, 'newOwnerUserId': newOwnerUserId},
+    );
+  }
+
+  /// 全群禁言/取消（管理员权限）。
+  static Future<void> muteGroupAll({
+    required int id,
+    required bool mutedAll,
+  }) async {
+    await ApiClient.dio.put(
+      '/admin-api/im/group/mute-all',
+      data: {'id': id, 'mutedAll': mutedAll},
+    );
+  }
+
+  /// 禁言成员（管理员权限；mutedSeconds=0 永久）。
+  static Future<void> muteGroupMember({
+    required int id,
+    required int userId,
+    required int mutedSeconds,
+  }) async {
+    await ApiClient.dio.put(
+      '/admin-api/im/group/mute-member',
+      data: {'id': id, 'userId': userId, 'mutedSeconds': mutedSeconds},
+    );
+  }
+
+  /// 取消成员禁言（管理员权限）。
+  static Future<void> cancelMuteGroupMember({
+    required int id,
+    required int userId,
+  }) async {
+    await ApiClient.dio.put(
+      '/admin-api/im/group/cancel-mute-member',
+      data: {'id': id, 'userId': userId},
+    );
+  }
+
+  /// 更新我的群成员信息（组内昵称/群备注/免打扰）。
+  static Future<void> updateMyGroupMember({
+    required int groupId,
+    String? displayUserName,
+    String? groupRemark,
+    bool? silent,
+  }) async {
+    await ApiClient.dio.put(
+      '/admin-api/im/group-member/update',
+      data: {
+        'groupId': groupId,
+        if (displayUserName != null) 'displayUserName': displayUserName,
+        if (groupRemark != null) 'groupRemark': groupRemark,
+        if (silent != null) 'silent': silent,
+      },
+    );
+  }
+
+  /// ==================== 进群申请（对应后端 ImGroupRequestController） ====================
+
+  /// 查询指定群的进群申请列表（管理员视角；含已处理记录）。
+  static Future<List<ImGroupRequest>> getGroupRequestList({
+    required int groupId,
+  }) async {
+    final resp = await ApiClient.dio.get(
+      '/admin-api/im/group-request/list-by-group',
+      queryParameters: {'groupId': groupId},
+    );
+    final data = ApiClient.unwrap(resp);
+    if (data is! List) return const [];
+    return data
+        .map((e) => ImGroupRequest.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// 同意进群申请。
+  static Future<void> agreeGroupRequest({required int id}) async {
+    await ApiClient.dio.put(
+      '/admin-api/im/group-request/agree',
+      queryParameters: {'id': id},
+    );
+  }
+
+  /// 拒绝进群申请。
+  static Future<void> refuseGroupRequest({
+    required int id,
+    String handleContent = '',
+  }) async {
+    await ApiClient.dio.put(
+      '/admin-api/im/group-request/refuse',
+      queryParameters: {'id': id, 'handleContent': handleContent},
+    );
+  }
+
   /// 增量拉取私聊消息（写入本地缓存用；会话列表数据源）。
   /// [minId] 游标：拉取 id 大于 minId 的消息；首次传 0 全量拉取。
   static Future<List<ImPrivateMessage>> pullPrivateMessages({

@@ -26,6 +26,7 @@ import '../../rtc/rtc_controller.dart';
 import '../../services/api_client.dart';
 import '../../services/auth_api.dart';
 import '../../services/auth_manager.dart';
+import '../../services/chat_history_cleaner.dart';
 import '../../services/im_api.dart';
 import '../../services/im_websocket.dart';
 import '../../shared/app_colors.dart';
@@ -35,6 +36,7 @@ import '../../shared/im_avatar.dart';
 import '../../shared/json_utils.dart';
 import '../../stores/conversation_store.dart';
 import 'face_picker_sheet.dart';
+import 'group_settings_page.dart';
 import 'hold_to_talk_button.dart';
 import '../contacts/user_profile_page.dart';
 
@@ -132,6 +134,13 @@ class _ChatPageState extends State<ChatPage> {
   /// 频道消息全量缓存（频道无 list 接口，读 pull 结果内存分页）。
   List<ChatMessage>? _channelAll;
 
+  /// 设置页返回后的标题覆盖（群名/备注可能已被修改）。
+  String? _titleOverride;
+
+  /// 本地清空记录时间点（null=未清空）：拉取消息过滤掉该时间点之前的。
+  DateTime? _clearedCutoff;
+  StreamSubscription? _clearSub;
+
   /// 好友索引：friendUserId → ImFriend（群聊消息发送者头像/昵称解析用）。
   /// 拉取失败时静默降级为字母色卡兜底。
   final Map<int, ImFriend> _friends = {};
@@ -176,6 +185,19 @@ class _ChatPageState extends State<ChatPage> {
     if (_isGroup) _loadGroupMembers();
     // 自己的头像/昵称（登录用户资料，null=尚未拉取过）
     _loadSelfProfile();
+    // 本地清空记录时间点：过滤历史消息 + 群设置页里清空时即时生效
+    ChatHistoryCleaner.cutoffOf(widget.type, widget.targetId).then((c) {
+      if (mounted && c != null) setState(() => _clearedCutoff = c);
+    });
+    _clearSub = ChatHistoryCleaner.clearedStream.listen((key) {
+      if (key != '${widget.type.value}_${widget.targetId}') return;
+      if (!mounted) return;
+      setState(() {
+        _clearedCutoff = DateTime.now();
+        _messages = [];
+        _noMore = true; // 清空后不再向上翻页（旧消息已按时间点挡掉）
+      });
+    });
     _loadFirstPage();
   }
 
@@ -279,9 +301,45 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 
+  /// 右上角三个点 → 会话设置（对齐 H5 openSetting）：
+  /// 私聊 → 好友资料页（三态复用页）；群聊 → 群设置页；频道无入口。
+  /// 返回后同步：群名/备注可能已改（标题刷新 + 成员重拉）、本地记录可能已清空。
+  Future<void> _openSettings() async {
+    Widget? page;
+    if (_isPrivate) {
+      page = UserProfilePage(userId: widget.targetId, addSource: 1);
+    } else if (_isGroup) {
+      page = GroupSettingsPage(groupId: widget.targetId);
+    }
+    if (page == null) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => page!),
+    );
+    if (!mounted) return;
+    if (_isGroup) {
+      _loadGroupMembers(); // 角色/昵称可能变化（被降权、改组内昵称等）
+      _syncGroupTitle();
+    }
+  }
+
+  /// 群设置页返回后同步标题（群名/我的群备注可能已被修改）。
+  Future<void> _syncGroupTitle() async {
+    try {
+      final group = await ImApi.getGroup(id: widget.targetId);
+      if (!mounted) return;
+      final name = group.shownName;
+      if (name.isNotEmpty && name != (_titleOverride ?? widget.title)) {
+        setState(() => _titleOverride = name);
+      }
+    } catch (_) {
+      // 静默：标题保持原值
+    }
+  }
+
   @override
   void dispose() {
     _wsSub?.cancel();
+    _clearSub?.cancel();
     _wsRefreshTimer?.cancel();
     _scrollCtrl.dispose();
     _inputCtrl.dispose();
@@ -336,6 +394,7 @@ class _ChatPageState extends State<ChatPage> {
   /// 返回过滤 RECALL(2101) 信号后的消息（原消息 status 已改为撤回态，
   /// 由原消息自身渲染「撤回了一条消息」提示）——注意「是否有更多」的
   /// 判定必须用过滤前的原始条数，否则撤回多的会话会误判翻完了。
+  /// 另外过滤本地清空时间点之前的消息（对齐 H5 clearConversationMessages）。
   Future<({List<ChatMessage> visible, int rawCount})> _query({
     int? maxId,
   }) async {
@@ -365,9 +424,13 @@ class _ChatPageState extends State<ChatPage> {
           .take(_pageSize)
           .toList();
     }
-    final visible = raw
-        .where((m) => m.type != ChatMsgType.recallSignal)
-        .toList();
+    final cutoff = _clearedCutoff;
+    final visible = raw.where((m) {
+      if (m.type == ChatMsgType.recallSignal) return false;
+      final t = m.sendTime;
+      if (cutoff != null && t != null && !t.isAfter(cutoff)) return false;
+      return true;
+    }).toList();
     return (visible: visible, rawCount: raw.length);
   }
 
@@ -1609,7 +1672,7 @@ class _ChatPageState extends State<ChatPage> {
               ),
               Expanded(
                 child: Text(
-                  widget.title,
+                  _titleOverride ?? widget.title,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   textAlign: TextAlign.center,
@@ -1627,11 +1690,14 @@ class _ChatPageState extends State<ChatPage> {
                   color: colors.surfaceText,
                   onPressed: _openCallMenu,
                 ),
-              IconButton(
-                icon: const Icon(Icons.more_horiz, size: 24),
-                color: colors.surfaceText,
-                onPressed: () {}, // TODO: 会话设置/群信息
-              ),
+              // 更多入口：私聊→好友资料页，群聊→群设置页（频道无此按钮，
+              // 对齐 H5 v-if="!isChannel"）
+              if (!_isChannel)
+                IconButton(
+                  icon: const Icon(Icons.more_horiz, size: 24),
+                  color: colors.surfaceText,
+                  onPressed: _openSettings,
+                ),
             ],
           ),
         ),
@@ -2313,6 +2379,25 @@ class _MessageItem extends StatelessWidget {
           downloadProgress: fileDownloadProgress[message.key],
         ),
       );
+    } else if (message.type == ChatMsgType.card &&
+        message.cardPayload != null) {
+      final card = message.cardPayload!;
+      // 名片气泡：点击群名片→群设置页（只读兜底），个人名片→用户资料页
+      content = GestureDetector(
+        onTap: card.isGroupCard
+            ? () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => GroupSettingsPage(groupId: card.targetId),
+                  ),
+                )
+            : () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        UserProfilePage(userId: card.targetId, addSource: 1),
+                  ),
+                ),
+        child: _CardBubbleBody(payload: card),
+      );
     } else {
       content = Text(
         message.displayText,
@@ -2866,6 +2951,56 @@ class _VideoBubbleBody extends StatelessWidget {
               ),
             ),
           if (progress != null) _buildProgressOverlay(progress!),
+        ],
+      ),
+    );
+  }
+}
+
+/// 名片气泡（对齐 H5 card-message）：头像 + 名称 + 「群名片/个人名片」标签；
+/// 群名片附成员数。宽度与文件卡片一致。
+class _CardBubbleBody extends StatelessWidget {
+  final CardPayload payload;
+
+  const _CardBubbleBody({required this.payload});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final subtitle = payload.isGroupCard
+        ? '群名片：${payload.memberCount}人'
+        : '个人名片';
+    return SizedBox(
+      width: 220,
+      child: Row(
+        children: [
+          ImAvatar(src: payload.avatar, name: payload.name, size: 42),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  payload.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: colors.text,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 12, color: colors.muted),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );

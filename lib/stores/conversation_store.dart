@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/im_conversation.dart';
 import '../models/im_message.dart';
@@ -51,6 +52,12 @@ class ConversationStore with ChangeNotifier {
   /// 会话读位置（key: type_targetId），未读数计算用。
   final Map<String, int> _readPositions = {};
 
+  /// 本地置顶会话集合（key: type_targetId；对应 H5 setConversationTop 的本地语义）。
+  /// 私聊另有服务端 pinned（好友表字段），两者取或；群聊/频道纯本地。
+  Set<String> _localPinned = {};
+  bool _localPinnedLoaded = false;
+  static const String _pinnedPrefsKey = 'im_local_pinned_conversations';
+
   /// 拉取并发保护 + 补拉防抖。
   bool _loading = false;
   bool _loadedOnce = false;
@@ -81,6 +88,9 @@ class ConversationStore with ChangeNotifier {
 
   Future<void> _doLoad() async {
     final myUserId = AuthManager.instance.userId;
+
+    // 本地置顶标记（首次惰性加载）
+    await _ensureLocalPinnedLoaded();
 
     // ① 元数据 + 读位置（并行）
     final friendListFuture = ImApi.getFriendList();
@@ -127,6 +137,68 @@ class ConversationStore with ChangeNotifier {
 
     // ④ 客户端聚合重建会话列表
     conversations = _rebuild(privateMsgs, groupMsgs, channelMsgs, myUserId);
+    notifyListeners();
+  }
+
+  /// 从磁盘加载本地置顶标记（仅一次）。
+  Future<void> _ensureLocalPinnedLoaded() async {
+    if (_localPinnedLoaded) return;
+    _localPinnedLoaded = true;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _localPinned = (prefs.getStringList(_pinnedPrefsKey) ?? const [])
+          .toSet();
+    } catch (_) {
+      // 磁盘异常：视为无本地置顶
+    }
+  }
+
+  /// 会话是否置顶（私聊 = 服务端 pinned 或本地；其余纯本地）。
+  bool isConversationTop(ImConversationType type, int targetId) {
+    if (type == ImConversationType.private) {
+      final server = friends[targetId]?.pinned ?? false;
+      if (server) return true;
+    }
+    return _localPinned.contains('${type.value}_$targetId');
+  }
+
+  /// 切换会话置顶（本地持久化 + 即时刷新列表，对应 H5 setConversationTop）。
+  Future<void> setConversationTop(
+    ImConversationType type,
+    int targetId,
+    bool top,
+  ) async {
+    await _ensureLocalPinnedLoaded();
+    final key = '${type.value}_$targetId';
+    if (top) {
+      _localPinned.add(key);
+    } else {
+      _localPinned.remove(key);
+    }
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(_pinnedPrefsKey, _localPinned.toList());
+    } catch (_) {
+      // 持久化失败不影响本次内存生效
+    }
+    // 即时更新聚合结果（避免全量重拉）
+    conversations = conversations.map((c) {
+      if (c.type != type || c.targetId != targetId) return c;
+      final next = top || (type == ImConversationType.private &&
+          (friends[targetId]?.pinned ?? false));
+      return ImConversation(
+        type: c.type,
+        targetId: c.targetId,
+        title: c.title,
+        avatar: c.avatar,
+        lastMessageText: c.lastMessageText,
+        lastMessageTime: c.lastMessageTime,
+        unreadCount: c.unreadCount,
+        pinned: next,
+        silent: c.silent,
+      );
+    }).toList()
+      ..sort((a, b) => a.compareTo(b));
     notifyListeners();
   }
 
@@ -241,7 +313,8 @@ class ConversationStore with ChangeNotifier {
         lastMessageText: last.textContent,
         lastMessageTime: last.sendTime,
         unreadCount: unread,
-        pinned: friend?.pinned ?? false,
+        pinned: (friend?.pinned ?? false) ||
+            _localPinned.contains('${ImConversationType.private.value}_$peerId'),
         silent: friend?.silent ?? false,
       ));
     }
@@ -267,7 +340,7 @@ class ConversationStore with ChangeNotifier {
         lastMessageText: last.textContent,
         lastMessageTime: last.sendTime,
         unreadCount: unread,
-        pinned: false,
+        pinned: _localPinned.contains('${ImConversationType.group.value}_$groupId'),
         silent: group?.silent ?? false,
       ));
     }
@@ -294,7 +367,7 @@ class ConversationStore with ChangeNotifier {
         lastMessageText: last.summaryText,
         lastMessageTime: last.sendTime,
         unreadCount: unread,
-        pinned: false,
+        pinned: _localPinned.contains('${ImConversationType.channel.value}_$channelId'),
         silent: false,
       ));
     }

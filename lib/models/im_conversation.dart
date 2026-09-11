@@ -79,6 +79,24 @@ class ImFriend {
   };
 }
 
+/// 群角色（对应后端 ImGroupMemberRoleEnum）。
+class ImGroupRole {
+  /// 群主。
+  static const int owner = 1;
+
+  /// 管理员。
+  static const int admin = 2;
+
+  /// 普通成员。
+  static const int normal = 3;
+}
+
+/// 通用状态（对应后端 CommonStatusEnum：0=有效 1=无效/退群）。
+class ImCommonStatus {
+  static const int enable = 0;
+  static const int disable = 1;
+}
+
 /// 群（对应后端 GroupRespVO）。
 class ImGroup {
   final int id;
@@ -87,6 +105,11 @@ class ImGroup {
   final String avatar;
   final String notice;
   final bool mutedAll;
+
+  /// 进群是否需群主/管理员审批。
+  final bool joinApproval;
+
+  /// 当前登录用户在该群的成员状态（0=在群 1=已退群，CommonStatusEnum）。
   final int joinStatus;
   final String groupRemark;
   final bool silent;
@@ -98,6 +121,7 @@ class ImGroup {
     required this.avatar,
     required this.notice,
     required this.mutedAll,
+    this.joinApproval = false,
     required this.joinStatus,
     required this.groupRemark,
     required this.silent,
@@ -111,27 +135,47 @@ class ImGroup {
       avatar: asString(json['avatar']),
       notice: asString(json['notice']),
       mutedAll: asBool(json['mutedAll']),
+      joinApproval: asBool(json['joinApproval']),
       joinStatus: asInt(json['joinStatus']),
       groupRemark: asString(json['groupRemark']),
       silent: asBool(json['silent']),
     );
   }
 
+  /// 是否已退群（历史群仍返回，供展示离线消息的群名/头像）。
+  bool get quit => joinStatus == ImCommonStatus.disable;
+
   /// 展示名：我的群备注优先，其次群名称。
   String get shownName =>
       groupRemark.isNotEmpty ? groupRemark : (name.isNotEmpty ? name : '群$id');
 }
 
-/// 群成员（对应后端 ImGroupMemberRespVO，仅取头像解析所需字段）。
+/// 群成员（对应后端 ImGroupMemberRespVO）。
 class ImGroupMember {
   final int userId;
   final String nickname;
   final String avatar;
 
+  /// 组内显示名（我在本群的昵称）。
+  final String displayUserName;
+
+  /// 成员角色（ImGroupRole：1=群主 2=管理员 3=普通）。
+  final int role;
+
+  /// 成员状态（0=有效 1=已退群，CommonStatusEnum）。
+  final int status;
+
+  /// 禁言截止时间（null 或早于当前时间表示未禁言）。
+  final DateTime? muteEndTime;
+
   const ImGroupMember({
     required this.userId,
     required this.nickname,
     required this.avatar,
+    this.displayUserName = '',
+    this.role = ImGroupRole.normal,
+    this.status = ImCommonStatus.enable,
+    this.muteEndTime,
   });
 
   factory ImGroupMember.fromJson(Map<String, dynamic> json) {
@@ -139,8 +183,86 @@ class ImGroupMember {
       userId: asInt(json['userId']),
       nickname: asString(json['nickname']),
       avatar: asString(json['avatar']),
+      displayUserName: asString(json['displayUserName']),
+      role: asInt(json['role'], ImGroupRole.normal),
+      status: asInt(json['status']),
+      muteEndTime: DateTime.tryParse(json['muteEndTime']?.toString() ?? ''),
     );
   }
+
+  /// 有效成员（未退群）。
+  bool get active => status == ImCommonStatus.enable;
+
+  /// 当前是否处于禁言中。
+  bool get muted =>
+      muteEndTime != null && muteEndTime!.isAfter(DateTime.now());
+
+  /// 展示名：组内昵称优先，其次用户昵称。
+  String get shownName =>
+      displayUserName.isNotEmpty ? displayUserName : nickname;
+}
+
+/// 进群申请（对应后端 ImGroupRequestRespVO）。
+class ImGroupRequest {
+  final int id;
+  final int groupId;
+  final int userId;
+  final int inviterUserId;
+
+  /// 处理结果（0=待处理 1=同意 2=拒绝）。
+  final int handleResult;
+  final String applyContent;
+  final String handleContent;
+  final DateTime? handleTime;
+  final DateTime? createTime;
+
+  /// 申请人昵称/头像（后端冗余回填）。
+  final String userNickname;
+  final String userAvatar;
+
+  const ImGroupRequest({
+    required this.id,
+    required this.groupId,
+    required this.userId,
+    this.inviterUserId = 0,
+    required this.handleResult,
+    this.applyContent = '',
+    this.handleContent = '',
+    this.handleTime,
+    this.createTime,
+    this.userNickname = '',
+    this.userAvatar = '',
+  });
+
+  factory ImGroupRequest.fromJson(Map<String, dynamic> json) {
+    return ImGroupRequest(
+      id: asInt(json['id']),
+      groupId: asInt(json['groupId']),
+      userId: asInt(json['userId']),
+      inviterUserId: asInt(json['inviterUserId']),
+      handleResult: asInt(json['handleResult']),
+      applyContent: asString(json['applyContent']),
+      handleContent: asString(json['handleContent']),
+      handleTime: DateTime.tryParse(json['handleTime']?.toString() ?? ''),
+      createTime: DateTime.tryParse(json['createTime']?.toString() ?? ''),
+      userNickname: asString(json['userNickname']),
+      userAvatar: asString(json['userAvatar']),
+    );
+  }
+
+  /// 展示名：申请人昵称兜底「用户N」。
+  String get shownName =>
+      userNickname.isNotEmpty ? userNickname : '用户$userId';
+
+  /// 是否待处理。
+  bool get pending => handleResult == 0;
+
+  /// 处理结果文案。
+  String get handleResultLabel => switch (handleResult) {
+    1 => '已同意',
+    2 => '已拒绝',
+    _ => '待处理',
+  };
 }
 
 /// 会话读位置（对应后端 ConversationReadRespVO）。

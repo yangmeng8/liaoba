@@ -30,6 +30,9 @@ class ChatMsgType {
   /// 图片表情消息：content = {"url","name","width","height"}。
   static const int face = 115;
 
+  /// 名片消息：content = {"targetType","targetId","name","avatar","memberCount"}。
+  static const int card = 108;
+
   /// 好友添加通知（系统消息）。
   static const int friendAdded = 1204;
 
@@ -189,6 +192,51 @@ class FacePayload {
     'width': width,
     'height': height,
   };
+}
+
+/// 名片消息 content 结构（对齐 H5 CardMessage：
+/// targetType 用 ImConversationType 值，群名片带 memberCount）。
+class CardPayload {
+  /// 名片目标类型（1=个人名片 2=群名片，ImConversationType）。
+  final int targetType;
+
+  /// 名片目标编号（用户编号 / 群编号）。
+  final int targetId;
+  final String name;
+  final String avatar;
+
+  /// 群成员数（仅群名片；个人名片为 0）。
+  final int memberCount;
+
+  const CardPayload({
+    required this.targetType,
+    required this.targetId,
+    required this.name,
+    this.avatar = '',
+    this.memberCount = 0,
+  });
+
+  factory CardPayload.fromJson(Map<String, dynamic> json) => CardPayload(
+    targetType: asInt(json['targetType']),
+    targetId: asInt(json['targetId']),
+    name: asString(json['name']),
+    avatar: asString(json['avatar']),
+    memberCount: asInt(json['memberCount']),
+  );
+
+  Map<String, dynamic> toJson() => {
+    'targetType': targetType,
+    'targetId': targetId,
+    'name': name,
+    'avatar': avatar,
+    'memberCount': memberCount,
+  };
+
+  /// 是否群名片。
+  bool get isGroupCard => targetType == ImConversationType.group.value;
+
+  /// 名片标签文案（对齐 H5 getCardLabelInfo）。
+  String get label => isGroupCard ? '群名片' : '个人名片';
 }
 
 /// 引用信息（content JSON 的 quote 字段，对齐 H5 QuoteMessage）。
@@ -453,6 +501,20 @@ class ChatMessage {
     isSelf: true,
   );
 
+  /// 本地名片占位（推荐群聊/好友名片发送用）。
+  factory ChatMessage.localCard({
+    required String clientMessageId,
+    required CardPayload payload,
+  }) => ChatMessage(
+    clientMessageId: clientMessageId,
+    senderId: AuthManager.instance.userId ?? 0,
+    type: ChatMsgType.card,
+    content: jsonEncode(payload.toJson()),
+    sendTime: DateTime.now(),
+    status: ChatMessageStatus.sending,
+    isSelf: true,
+  );
+
   /// 更新本地状态（占位 → sent/failed）。
   ChatMessage withStatus(ChatMessageStatus s) => ChatMessage(
     id: id,
@@ -563,6 +625,14 @@ class ChatMessage {
             : null)
       : null;
 
+  /// 名片消息 payload（非名片消息返回 null）。
+  CardPayload? get cardPayload => type == ChatMsgType.card
+      ? (contentMap['targetId'] != null &&
+                contentMap['targetId'].toString().isNotEmpty
+            ? CardPayload.fromJson(contentMap)
+            : null)
+      : null;
+
   /// 引用信息（content JSON 的 quote 字段，对齐 H5 Quotable）。
   QuotePayload? get quotePayload {
     final q = contentMap['quote'];
@@ -589,7 +659,8 @@ class ChatMessage {
           type == ChatMsgType.voice ||
           type == ChatMsgType.video ||
           type == ChatMsgType.file ||
-          type == ChatMsgType.face);
+          type == ChatMsgType.face ||
+          type == ChatMsgType.card);
 
   /// 是否可撤回：自己的消息 + 发送时间在撤回窗口内（对齐 H5 2 分钟窗口）。
   bool canRecall({Duration window = const Duration(minutes: 2)}) {
@@ -619,6 +690,9 @@ class ChatMessage {
         return '[文件]';
       case ChatMsgType.face:
         return '[表情]';
+      case ChatMsgType.card:
+        final card = cardPayload;
+        return card != null ? '[${card.label}] ${card.name}' : '[名片]';
       case ChatMsgType.rtcCallStart:
       case ChatMsgType.rtcCallEnd:
         // 通话消息：按会话类型给摘要（私聊 [语音通话] / 群聊 tip 文案）
