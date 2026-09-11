@@ -4,6 +4,7 @@ import 'pages/contacts/contacts_page.dart';
 import 'pages/logInAndSignUp/login_page.dart';
 import 'pages/me/me_page.dart';
 import 'pages/messages/messages_page.dart';
+import 'rtc/rtc_controller.dart';
 import 'services/auth_manager.dart';
 import 'services/im_websocket.dart';
 import 'shared/app_colors.dart';
@@ -23,6 +24,9 @@ Future<void> main() async {
   await AuthManager.instance.load();
   // 注入全局导航 Key（AuthManager 401 处理用）
   AuthManager.instance.rootNavigatorKey = _rootNavigatorKey;
+  // 注入 RTC 全局导航 Key（来电信令自动拉起通话页）；
+  // 触发 RtcController 单例构造，启动 WebSocket 信令监听
+  RtcController.instance.navigatorKey = _rootNavigatorKey;
   runApp(const LiaobaApp());
 }
 

@@ -1,5 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.CAMERA"/>
+    <!-- 音视频通话：麦克风 + 音频路由控制（听筒/扬声器切换） -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
     <application
         android:label="liaoba"
         android:name="${applicationName}"

@@ -22,6 +22,7 @@ import '../../models/im_conversation.dart';
 import '../../models/im_face.dart';
 import '../../models/im_message.dart';
 import '../../models/im_ws_frame.dart';
+import '../../rtc/rtc_controller.dart';
 import '../../services/api_client.dart';
 import '../../services/auth_api.dart';
 import '../../services/auth_manager.dart';
@@ -902,6 +903,102 @@ class _ChatPageState extends State<ChatPage> {
       ..showSnackBar(SnackBar(content: Text(msg)));
   }
 
+  /// ==================== 音视频通话入口（对应 H5 openCallMenu） ====================
+
+  /// 通话菜单：语音通话 / 视频通话。
+  /// 群聊无可邀请成员（除自己外无成员）时拦截提示。
+  void _openCallMenu() {
+    final myUserId = AuthManager.instance.userId ?? 0;
+    final invitable = _groupMembers.values
+        .where((m) => m.userId != myUserId)
+        .toList();
+    if (_isGroup && invitable.isEmpty) {
+      _showSnack('暂无可邀请的群成员');
+      return;
+    }
+    final colors = context.colors;
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: colors.card,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (sheetCtx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            _callMenuItem(
+              sheetCtx,
+              icon: Icons.phone_outlined,
+              label: '语音通话',
+              onTap: () => _handleCallAction(sheetCtx, 1),
+            ),
+            _callMenuItem(
+              sheetCtx,
+              icon: Icons.videocam_outlined,
+              label: '视频通话',
+              onTap: () => _handleCallAction(sheetCtx, 2),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 菜单项行（图标 + 文案，点击关闭弹层后执行动作）。
+  Widget _callMenuItem(
+    BuildContext sheetCtx, {
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return ListTile(
+      leading: Icon(icon, size: 26, color: AppColors.lime),
+      title: Text(label, style: const TextStyle(fontSize: 16)),
+      onTap: () {
+        Navigator.pop(sheetCtx);
+        onTap();
+      },
+    );
+  }
+
+  /// 发起通话分流（对应 H5 handleCallAction）：
+  /// 私聊 → 直接发起；群聊 → 先选成员再发起。
+  Future<void> _handleCallAction(BuildContext sheetCtx, int mediaType) async {
+    if (_isPrivate) {
+      await RtcController.instance.start(
+        conversationType: 1,
+        mediaType: mediaType,
+        inviteeIds: [widget.targetId],
+      );
+      return;
+    }
+    // 群聊：选择被邀请成员
+    final myUserId = AuthManager.instance.userId ?? 0;
+    final members = _groupMembers.values
+        .where((m) => m.userId != myUserId)
+        .toList();
+    if (members.isEmpty) {
+      _showSnack('暂无可邀请的群成员');
+      return;
+    }
+    final selected = await showModalBottomSheet<List<int>>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _CallMemberSheet(members: members),
+    );
+    if (selected == null || selected.isEmpty) return;
+    await RtcController.instance.start(
+      conversationType: 2,
+      mediaType: mediaType,
+      groupId: widget.targetId,
+      inviteeIds: selected,
+    );
+  }
+
   /// 上传失败的错误文案：413（nginx 体积超限）给出明确指引。
   String _uploadErrorMessage(Object e) {
     if (e is DioException) {
@@ -1523,6 +1620,13 @@ class _ChatPageState extends State<ChatPage> {
                   ),
                 ),
               ),
+              // 通话入口：私聊/群聊可发起语音、视频通话（频道不支持）
+              if (_isPrivate || _isGroup)
+                IconButton(
+                  icon: const Icon(Icons.phone_outlined, size: 22),
+                  color: colors.surfaceText,
+                  onPressed: _openCallMenu,
+                ),
               IconButton(
                 icon: const Icon(Icons.more_horiz, size: 24),
                 color: colors.surfaceText,
@@ -3883,6 +3987,146 @@ class _SystemTipText extends StatelessWidget {
         ],
       ),
       textAlign: TextAlign.center,
+    );
+  }
+}
+
+/// 群通话成员选择弹层（对应 H5 GroupMemberPicker）：
+/// 网格多选（头像 + 昵称 + 勾选标记），确认后返回选中 userId 列表。
+class _CallMemberSheet extends StatefulWidget {
+  /// 可邀请成员（调用方已排除自己）。
+  final List<ImGroupMember> members;
+
+  const _CallMemberSheet({required this.members});
+
+  @override
+  State<_CallMemberSheet> createState() => _CallMemberSheetState();
+}
+
+class _CallMemberSheetState extends State<_CallMemberSheet> {
+  final Set<int> _selected = {};
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final height = MediaQuery.of(context).size.height * 0.6;
+    return Container(
+      height: height,
+      decoration: BoxDecoration(
+        color: colors.card,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          children: [
+            // 标题栏 + 确认按钮
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 8, 0),
+              child: Row(
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: Text(
+                      '取消',
+                      style: TextStyle(fontSize: 14, color: colors.muted),
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(
+                      '选择成员',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: colors.text,
+                      ),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: _selected.isEmpty
+                        ? null
+                        : () => Navigator.of(context).pop(_selected.toList()),
+                    child: Text(
+                      _selected.isEmpty ? '邀请' : '邀请(${_selected.length})',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: AppColors.lime,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // 成员网格
+            Expanded(
+              child: GridView.builder(
+                padding: const EdgeInsets.all(12),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 4,
+                  mainAxisSpacing: 12,
+                  crossAxisSpacing: 8,
+                  childAspectRatio: 0.78,
+                ),
+                itemCount: widget.members.length,
+                itemBuilder: (context, index) {
+                  final m = widget.members[index];
+                  final selected = _selected.contains(m.userId);
+                  return GestureDetector(
+                    onTap: () => setState(() {
+                      if (!_selected.add(m.userId)) {
+                        _selected.remove(m.userId);
+                      }
+                    }),
+                    child: Column(
+                      children: [
+                        Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            ImAvatar(
+                              src: m.avatar,
+                              name: m.nickname,
+                              size: 52,
+                              borderRadius: BorderRadius.circular(26),
+                            ),
+                            if (selected)
+                              Positioned(
+                                right: -2,
+                                bottom: -2,
+                                child: Container(
+                                  padding: const EdgeInsets.all(3),
+                                  decoration: const BoxDecoration(
+                                    color: AppColors.lime,
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: const Icon(
+                                    Icons.check,
+                                    size: 12,
+                                    color: Colors.black,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          m.nickname.isEmpty ? '用户${m.userId}' : m.nickname,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: selected ? colors.text : colors.muted,
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

@@ -1,6 +1,10 @@
 PODS:
   - audio_session (0.0.1):
     - Flutter
+  - connectivity_plus (0.0.1):
+    - Flutter
+  - device_info_plus (0.0.1):
+    - Flutter
   - DKImagePickerController/Core (4.3.9):
     - DKImagePickerController/ImageDataManager
     - DKImagePickerController/Resource
@@ -36,6 +40,9 @@ PODS:
     - DKImagePickerController/PhotoGallery
     - Flutter
   - Flutter (1.0.0)
+  - flutter_webrtc (1.6.0):
+    - Flutter
+    - WebRTC-SDK (= 144.7559.09)
   - image_picker_ios (0.0.1):
     - Flutter
   - just_audio (0.0.1):
@@ -53,6 +60,10 @@ PODS:
   - libwebp/sharpyuv (1.5.0)
   - libwebp/webp (1.5.0):
     - libwebp/sharpyuv
+  - livekit_client (2.12.0):
+    - Flutter
+    - flutter_webrtc
+    - WebRTC-SDK (= 144.7559.09)
   - open_filex (0.0.2):
     - Flutter
   - package_info_plus (0.4.5):
@@ -74,13 +85,18 @@ PODS:
   - video_thumbnail (0.0.1):
     - Flutter
     - libwebp
+  - WebRTC-SDK (144.7559.09)
 
 DEPENDENCIES:
   - audio_session (from `.symlinks/plugins/audio_session/ios`)
+  - connectivity_plus (from `.symlinks/plugins/connectivity_plus/ios`)
+  - device_info_plus (from `.symlinks/plugins/device_info_plus/ios`)
   - file_picker (from `.symlinks/plugins/file_picker/ios`)
   - Flutter (from `Flutter`)
+  - flutter_webrtc (from `.symlinks/plugins/flutter_webrtc/ios`)
   - image_picker_ios (from `.symlinks/plugins/image_picker_ios/ios`)
   - just_audio (from `.symlinks/plugins/just_audio/darwin`)
+  - livekit_client (from `.symlinks/plugins/livekit_client/ios`)
   - open_filex (from `.symlinks/plugins/open_filex/ios`)
   - package_info_plus (from `.symlinks/plugins/package_info_plus/ios`)
   - record_ios (from `.symlinks/plugins/record_ios/ios`)
@@ -96,18 +112,27 @@ SPEC REPOS:
     - libwebp
     - SDWebImage
     - SwiftyGif
+    - WebRTC-SDK
 
 EXTERNAL SOURCES:
   audio_session:
     :path: ".symlinks/plugins/audio_session/ios"
+  connectivity_plus:
+    :path: ".symlinks/plugins/connectivity_plus/ios"
+  device_info_plus:
+    :path: ".symlinks/plugins/device_info_plus/ios"
   file_picker:
     :path: ".symlinks/plugins/file_picker/ios"
   Flutter:
     :path: Flutter
+  flutter_webrtc:
+    :path: ".symlinks/plugins/flutter_webrtc/ios"
   image_picker_ios:
     :path: ".symlinks/plugins/image_picker_ios/ios"
   just_audio:
     :path: ".symlinks/plugins/just_audio/darwin"
+  livekit_client:
+    :path: ".symlinks/plugins/livekit_client/ios"
   open_filex:
     :path: ".symlinks/plugins/open_filex/ios"
   package_info_plus:
@@ -125,13 +150,17 @@ EXTERNAL SOURCES:
 
 SPEC CHECKSUMS:
   audio_session: 9bb7f6c970f21241b19f5a3658097ae459681ba0
+  connectivity_plus: cb623214f4e1f6ef8fe7403d580fdad517d2f7dd
+  device_info_plus: 21fcca2080fbcd348be798aa36c3e5ed849eefbe
   DKImagePickerController: 946cec48c7873164274ecc4624d19e3da4c1ef3c
   DKPhotoGallery: b3834fecb755ee09a593d7c9e389d8b5d6deed60
   file_picker: a0560bc09d61de87f12d246fc47d2119e6ef37be
   Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
+  flutter_webrtc: f952258e6fa67477d481cfbad2885a4f117922a7
   image_picker_ios: e0ece4aa2a75771a7de3fa735d26d90817041326
   just_audio: 4e391f57b79cad2b0674030a00453ca5ce817eed
   libwebp: 02b23773aedb6ff1fd38cec7a77b81414c6842a8
+  livekit_client: bf9de63fed5bbbbba717f7995d595ff30c9a8b58
   open_filex: 432f3cd11432da3e39f47fcc0df2b1603854eff1
   package_info_plus: af8e2ca6888548050f16fa2f1938db7b5a5df499
   record_ios: 980fd386a97a35987d0fce3dfda4b26a38c90f4c
@@ -141,6 +170,7 @@ SPEC CHECKSUMS:
   video_compress: f2133a07762889d67f0711ac831faa26f956980e
   video_player_avfoundation: 3453f792138786248960ca029747fcd9f318ef52
   video_thumbnail: b637e0ad5f588ca9945f6e2c927f73a69a661140
+  WebRTC-SDK: e6006119cd730d6315d875e4a421b6cc8bb88833
 
 PODFILE CHECKSUM: 3c63482e143d1b91d2d2560aee9fb04ecc74ac7e
 
