@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../shared/group_avatar.dart';
 import 'im_websocket.dart';
 
 /// 登录态管理：内存 + shared_preferences 持久化。
@@ -91,6 +92,8 @@ class AuthManager {
     if (_redirectingToLogin) return;
     _redirectingToLogin = true;
     await clear();
+    // 清空群头像成员表缓存（重新登录后按新账号拉取）
+    GroupAvatar.clearCache();
     // token 已失效，长连接停止重连（重新登录后 ensure() 会重建）
     ImWebSocket.instance.disconnect();
     final nav = rootNavigatorKey?.currentState;

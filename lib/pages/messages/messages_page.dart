@@ -4,6 +4,8 @@ import '../../models/im_conversation.dart';
 import '../../services/api_client.dart';
 import '../../shared/app_colors.dart';
 import '../../shared/app_theme.dart';
+import '../../shared/group_avatar.dart';
+import '../../shared/im_avatar.dart';
 import '../../shared/widgets.dart';
 import '../../stores/conversation_store.dart';
 import '../chat/chat_page.dart';
@@ -166,12 +168,7 @@ class _ConversationTile extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         child: Row(
           children: [
-            _Avatar(
-              name: conversation.title,
-              avatarUrl: conversation.avatar,
-              isGroup: conversation.type == ImConversationType.group,
-              isChannel: conversation.type == ImConversationType.channel,
-            ),
+            _Avatar(conversation: conversation),
             const SizedBox(width: 12),
             // 名称 + 摘要
             Expanded(
@@ -233,73 +230,34 @@ class _ConversationTile extends StatelessWidget {
   }
 }
 
-/// 头像：有 URL 加载网络图；群聊多人图标；频道喇叭图标；其余取名称首字。
+/// 头像渲染分流（对应 H5 conversation-item）：
+/// - 群聊 → GroupAvatar（自定义头像单图 / 前 9 有效成员九宫格 / 群名首字兜底）
+/// - 私聊/频道 → ImAvatar（有图显图，无图名字首字 + hash 色卡）
 class _Avatar extends StatelessWidget {
-  final String name;
-  final String avatarUrl;
-  final bool isGroup;
-  final bool isChannel;
+  final ImConversation conversation;
 
-  const _Avatar({
-    required this.name,
-    required this.avatarUrl,
-    required this.isGroup,
-    this.isChannel = false,
-  });
+  const _Avatar({required this.conversation});
 
   @override
   Widget build(BuildContext context) {
-    Widget child;
-    if (avatarUrl.isNotEmpty) {
-      child = Image.network(
-        avatarUrl,
-        width: 56,
-        height: 56,
-        fit: BoxFit.cover,
-        errorBuilder: (_, _, _) => _fallback(context),
+    if (conversation.type == ImConversationType.group) {
+      return GroupAvatar(
+        groupId: conversation.targetId,
+        src: conversation.avatar,
+        name: conversation.title,
+        size: 56,
       );
-    } else {
-      child = _fallback(context);
     }
-    return ClipRRect(
+    return ImAvatar(
+      src: conversation.avatar,
+      name: conversation.title,
+      size: 56,
       borderRadius: BorderRadius.circular(12),
-      child: SizedBox(width: 56, height: 56, child: child),
-    );
-  }
-
-  Widget _fallback(BuildContext context) {
-    if (isChannel) {
-      return Container(
-        color: context.colors.divider,
-        alignment: Alignment.center,
-        child: Icon(Icons.campaign_outlined,
-            size: 30, color: context.colors.muted),
-      );
-    }
-    if (isGroup) {
-      return Container(
-        color: context.colors.divider,
-        alignment: Alignment.center,
-        child: Icon(Icons.groups_outlined, size: 30, color: context.colors.muted),
-      );
-    }
-    final initial = name.isNotEmpty ? name.characters.first : '?';
-    return Container(
-      color: AppColors.lime,
-      alignment: Alignment.center,
-      child: Text(
-        initial,
-        style: const TextStyle(
-          fontSize: 22,
-          fontWeight: FontWeight.w600,
-          color: Colors.black,
-        ),
-      ),
     );
   }
 }
 
-/// 未读角标：免打扰灰点；普通红底数字；99+ 封顶。
+/// 未读角标（对齐 H5）：免打扰红点模式（不显数字）；普通红底数字；99+ 封顶。
 class _UnreadBadge extends StatelessWidget {
   final int count;
   final bool silent;
@@ -316,9 +274,12 @@ class _UnreadBadge extends StatelessWidget {
     if (count <= 0) return const SizedBox.shrink();
     if (silent) {
       return Container(
-        width: 10,
-        height: 10,
-        decoration: BoxDecoration(color: mutedColor, shape: BoxShape.circle),
+        width: 8,
+        height: 8,
+        decoration: const BoxDecoration(
+          color: Color(0xFFFA5151),
+          shape: BoxShape.circle,
+        ),
       );
     }
     return Container(

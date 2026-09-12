@@ -4,6 +4,7 @@ import '../../../services/auth_manager.dart';
 import '../../../services/im_websocket.dart';
 import '../../../shared/app_colors.dart';
 import '../../../shared/app_theme.dart';
+import '../../../shared/group_avatar.dart';
 import '../../logInAndSignUp/login_page.dart';
 import 'security/account_security_page.dart';
 import 'feedback_page.dart';
@@ -32,6 +33,8 @@ class GeneralSettingsPage extends StatelessWidget {
 
     // 清除本地登录态（token、用户信息），下次启动需重新登录
     await AuthManager.instance.clear();
+    // 清空群头像成员表缓存（切换账号后九宫格不串号）
+    GroupAvatar.clearCache();
     if (!context.mounted) return;
     // 清空整个导航栈并跳转登录页，避免用户返回到已登出的页面
     Navigator.of(context).pushAndRemoveUntil(
