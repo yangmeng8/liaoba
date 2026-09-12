@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
@@ -26,11 +27,23 @@ enum RtcStage {
   running,
 }
 
-/// RTC 信令 contentType（对应后端 ImContentTypeEnum 1601-1603）。
+/// RTC 信令 contentType（对应后端 ImContentTypeEnum）。
 class RtcSignalType {
+  /// 通话信令（INVITING/REJECTED/NO_ANSWER；NONE 会话帧，仅推参与方）。
   static const int call = 1601;
+
+  /// 参与者进房（LiveKit webhook participant_joined 触发；NONE 帧）。
   static const int participantConnected = 1602;
+
+  /// 参与者离房（LiveKit webhook participant_left 触发；NONE 帧）。
   static const int participantDisconnected = 1603;
+
+  /// 通话开始消息（入会话消息流；仅聊天记录展示用）。
+  static const int callStart = 1610;
+
+  /// 通话结束消息（入会话消息流：挂断/取消/拒接/超时统一走 endSession
+  /// 落消息并推送——这是私聊通话结束的权威信号，1601 无 LEFT/REJECTED）。
+  static const int callEnd = 1611;
 }
 
 /// 信令/参与者状态（对应后端 ImRtcParticipantStatusEnum）。
@@ -58,6 +71,9 @@ class RtcController extends ChangeNotifier {
         finishCall(localEnd: false, toast: '通话已结束');
       }
     };
+    // LiveKit 对方进房 → 主叫 INVITING 接通（预连房间场景的本地事件，
+    // 不依赖服务端 webhook；与 1602 信令双通道，先到先得）
+    liveKit.onParticipantConnected = _onPeerConnected;
   }
 
   static final RtcController instance = RtcController._();
@@ -149,13 +165,17 @@ class RtcController extends ChangeNotifier {
       _stage = RtcStage.inviting;
       notifyListeners();
       _openCallPage();
-      // 群通话创建即进房（成员陆续加入）；私聊接通才进房
+      // 群通话创建即进房（成员陆续加入）
       if (conversationType == 2) {
         await _enterRunning(autoConnect: true);
       } else if (data.status == 20) {
         // 私聊对方已在线即刻接听（多端场景）
         await _enterRunning(autoConnect: true);
       } else {
+        // 私聊：INVITING 即预连 LiveKit 房间（对齐 H5 connectRoom 行为），
+        // 对方接听进房时靠 LiveKit ParticipantConnected 本地事件感知接通
+        // ——不依赖服务端 webhook；1602 信令到达时双保险重连
+        await _preConnectRoom();
         _startNoAnswerPolling();
       }
     } catch (e) {
@@ -165,18 +185,112 @@ class RtcController extends ChangeNotifier {
     }
   }
 
-  /// ==================== 被叫（信令驱动） ====================
-
-  /// WS 通知分发：NONE 会话的 RTC 信令帧。
-  void _onNotification(ImWsNotification n) {
-    if (n.conversationType != 0) return;
-    if (n.contentType == RtcSignalType.call) {
-      _receiveSignal(RtcSignalPayload.fromPayload(n.payload));
+  /// 主叫 INVITING 预连房间（连上即开麦；失败不阻断等待流程，
+  /// 后续 1602 信令到达时 _enterRunning 会重试连接）。
+  Future<void> _preConnectRoom() async {
+    final data = call;
+    if (data == null || liveKit.connected) return;
+    try {
+      await liveKit.connect(
+        url: data.livekitUrl,
+        token: data.token,
+        enableCamera: data.isVideo,
+        myName: AuthManager.instance.nickname ?? '',
+      );
+    } catch (e) {
+      debugPrint('[RTC] LiveKit 预连失败：$e');
     }
-    // 1602/1603 参与者进出房事件：LiveKit 事件已覆盖，无需重复处理
   }
 
-  /// 信令处理（对齐 H5 receiveSignal）。
+  /// LiveKit 对方进房（预连场景接通感知，等价 H5 ParticipantConnected →
+  /// syncParticipant(joined) → INVITING 时 enterRunning）：
+  /// 房间必然已连接（预连成功才会有事件），仅切状态起计时。
+  void _onPeerConnected(int userId) {
+    final myUserId = AuthManager.instance.userId ?? 0;
+    if (userId == myUserId || userId <= 0) return;
+    if (_stage == RtcStage.inviting && call != null) {
+      _enterRunning(autoConnect: false);
+    }
+  }
+
+  /// ==================== 被叫（信令驱动） ====================
+
+  /// WS 通知分发（对齐 H5 dispatchNoConversationFrame + handleRtcCallEnd）：
+  /// - RTC_CALL_END(1611) 走会话消息流（私聊/群聊帧）：通话结束的权威信号
+  /// - NONE 帧的 1601 信令 / 1602 / 1603 参与者进出房事件
+  void _onNotification(ImWsNotification n) {
+    if (n.contentType == RtcSignalType.callEnd) {
+      _handleCallEndMessage(n.payload);
+      return;
+    }
+    if (n.conversationType != 0) return;
+    switch (n.contentType) {
+      case RtcSignalType.call:
+        _receiveSignal(RtcSignalPayload.fromPayload(n.payload));
+        break;
+      case RtcSignalType.participantConnected:
+        _handleParticipantConnected(n.payload);
+        break;
+      case RtcSignalType.participantDisconnected:
+        _handleParticipantDisconnected(n.payload);
+        break;
+    }
+  }
+
+  /// 参与者进房（LiveKit webhook participant_joined 触发，私聊推双方多端）：
+  /// 主叫 INVITING 阶段收到对方进房 → 接通进 RUNNING。
+  /// 注意：主叫 INVITING 时尚未连 LiveKit 房间，收不到 LiveKit 的
+  /// participantConnected 事件——此信令是主叫感知「对方已接听」的唯一渠道。
+  void _handleParticipantConnected(Map<String, dynamic> payload) {
+    final myUserId = AuthManager.instance.userId ?? 0;
+    final room = asString(payload['room']);
+    final userId = asInt(payload['userId']);
+    if (room.isEmpty || userId == myUserId || userId <= 0) return;
+    if (_stage == RtcStage.inviting && call?.room == room) {
+      _enterRunning(autoConnect: true);
+    }
+  }
+
+  /// 参与者离房（LiveKit webhook participant_left 触发）：
+  /// 私聊 RUNNING 时对方离房 → 通话结束（对方挂断后 endSession 的
+  /// RTC_CALL_END 消息与本信令双保险，finishCall 幂等只生效一次）。
+  /// 群聊不终结（其他成员可能仍在房）。
+  void _handleParticipantDisconnected(Map<String, dynamic> payload) {
+    final myUserId = AuthManager.instance.userId ?? 0;
+    final room = asString(payload['room']);
+    final userId = asInt(payload['userId']);
+    if (room.isEmpty || userId == myUserId || userId <= 0) return;
+    final conv = call?.conversationType ?? 0;
+    if (conv == 1 && _stage == RtcStage.running && call?.room == room) {
+      finishCall(localEnd: false, toast: '通话已结束');
+    }
+  }
+
+  /// RTC_CALL_END(1611) 消息帧（入会话消息流；挂断/取消/拒接/超时统一走它）：
+  /// content 为 ImRtcCallEndNotification 的 JSON 字符串，room 匹配当前
+  /// 通话（主叫 call / 被叫 incomingSignal）即收尾。
+  void _handleCallEndMessage(Map<String, dynamic> payload) {
+    final raw = payload['content'];
+    Map<String, dynamic> parsed = const {};
+    if (raw is String && raw.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map<String, dynamic>) parsed = decoded;
+      } catch (_) {
+        // 非 JSON：忽略
+      }
+    } else if (raw is Map) {
+      parsed = Map<String, dynamic>.from(raw);
+    }
+    final room = asString(parsed['room']);
+    if (room.isEmpty) return;
+    if (call?.room == room || incomingSignal?.room == room) {
+      finishCall(localEnd: false, toast: '通话已结束');
+    }
+  }
+
+  /// 信令处理（对齐 H5 receiveSignal；后端 1601 仅推 INVITING/REJECTED/NO_ANSWER：
+  /// 私聊拒绝/超时不走此信令，由 RTC_CALL_END 消息兜底；接通感知靠 1602）。
   void _receiveSignal(RtcSignalPayload signal) {
     final myUserId = AuthManager.instance.userId ?? 0;
     final isEcho = signal.inviterUserId == myUserId; // 自己发起的回声
@@ -196,42 +310,10 @@ class RtcController extends ChangeNotifier {
         notifyListeners();
         _openCallPage();
         break;
-      case RtcParticipantStatus.joined:
-        // 对方接听：INVITING → RUNNING
-        if (_stage == RtcStage.inviting && call?.room == signal.room) {
-          _enterRunning(autoConnect: true);
-        }
-        break;
       case RtcParticipantStatus.rejected:
       case RtcParticipantStatus.noAnswer:
-        // 对方拒绝/超时：私聊整通结束；群聊不终结（成员陆续加入）
-        if (call?.room != signal.room && incomingSignal?.room != signal.room) {
-          return;
-        }
-        final conv1 = call?.conversationType ??
-            incomingSignal?.conversationType ??
-            0;
-        if (conv1 == 1) {
-          finishCall(
-            localEnd: false,
-            toast: signal.status == RtcParticipantStatus.rejected
-                ? '对方已拒绝'
-                : '对方未接听',
-          );
-        }
-        break;
-      case RtcParticipantStatus.left:
-        // 对方挂断/主叫取消：私聊整通结束；群聊由 LiveKit 事件感知
-        // 被叫 INCOMING 时 call 为 null，room 以 incomingSignal 兜底
-        if (call?.room != signal.room && incomingSignal?.room != signal.room) {
-          return;
-        }
-        final conv2 = call?.conversationType ??
-            incomingSignal?.conversationType ??
-            0;
-        if (conv2 == 1) {
-          finishCall(localEnd: false, toast: '通话已结束');
-        }
+        // 仅群通话场景推送（成员拒接/超时）：主叫侧移除该成员即可，
+        // 群通话不因此终结（其他成员可能陆续加入）
         break;
       default:
         break;
@@ -258,10 +340,13 @@ class RtcController extends ChangeNotifier {
     if (data == null) return;
     _noAnswerTimer?.cancel();
     _noAnswerTimer = null;
-    _stage = RtcStage.running;
-    _runningSince = DateTime.now();
-    notifyListeners();
-    if (autoConnect) {
+    // 幂等：LiveKit 事件与 1602 信令双通道可能都触发，只在首次切换起计时
+    if (_stage != RtcStage.running) {
+      _stage = RtcStage.running;
+      _runningSince = DateTime.now();
+      notifyListeners();
+    }
+    if (autoConnect && !liveKit.connected) {
       try {
         await liveKit.connect(
           url: data.livekitUrl,

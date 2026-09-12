@@ -65,18 +65,22 @@ class _RtcCallPageState extends State<RtcCallPage> {
 
   int get _myUserId => AuthManager.instance.userId ?? 0;
 
-  /// 对端 userId（INVITING 私聊对方；INCOMING 主叫人）。
+  /// 对端 userId（INVITING/INCOMING 私聊对方；群聊无对端概念返回 null）。
   int? get _peerUserId {
     if (_ctrl.stage == RtcStage.incoming) {
       final id = _ctrl.incomingSignal?.inviterUserId ?? 0;
       return id > 0 ? id : null;
     }
     final call = _ctrl.call;
-    if (call?.conversationType == 1) {
-      final ids = call?.inviteeIds ?? const <int>[];
-      return ids.isNotEmpty ? ids.first : null;
-    }
-    return null;
+    if (call?.conversationType != 1) return null;
+    // 后端 inviteeIds 仅含 INVITING 状态参与者：接听后变 JOINED 即移出，
+    // 故 accept 返回的快照里为空——需再从 joinedUserIds 取非本人兜底
+    final ids = call?.inviteeIds ?? const <int>[];
+    if (ids.isNotEmpty) return ids.first;
+    final joined = (call?.joinedUserIds ?? const <int>[])
+        .where((id) => id != _myUserId)
+        .toList();
+    return joined.isNotEmpty ? joined.first : null;
   }
 
   /// 对端显示名（INVITING/INCOMING 顶部标题）。
@@ -91,8 +95,8 @@ class _RtcCallPageState extends State<RtcCallPage> {
     }
     final peer = _peerUserId;
     if (peer != null && peer > 0) return _cachedName(peer);
-    // 群通话主叫瞬间即 RUNNING，这里兜底群文案
-    return '群通话';
+    // 群通话主叫瞬间即 RUNNING 无对端概念；私聊对端尚未解析时短暂兜底
+    return _ctrl.call?.conversationType == 1 ? '对方' : '群通话';
   }
 
   /// 对端头像（INVITING/INCOMING 大头像）。

@@ -60,6 +60,10 @@ class RtcLiveKitRoom {
   /// 主动 disconnect 前会被清空，防本地挂断误触发）。
   void Function()? onDisconnected;
 
+  /// 参与者进房回调（Controller 感知对方接通用：主叫 INVITING 预连场景，
+  /// identity = userId 约定）。
+  void Function(int userId)? onParticipantConnected;
+
   /// 参与者/轨道变化流（UI 监听重建宫格）。
   Stream<void> get changes => _participantsCtrl.stream;
 
@@ -178,6 +182,8 @@ class RtcLiveKitRoom {
           RtcParticipant(identity: e.participant.identity, name: e.participant.name),
     );
     _emit();
+    final userId = int.tryParse(e.participant.identity) ?? 0;
+    if (userId > 0) onParticipantConnected?.call(userId);
   }
 
   void _onParticipantDisconnected(ParticipantDisconnectedEvent e) {
