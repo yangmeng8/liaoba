@@ -33,6 +33,9 @@ class ChatMsgType {
   /// 名片消息：content = {"targetType","targetId","name","avatar","memberCount"}。
   static const int card = 108;
 
+  /// 频道素材消息：content = {"materialId","channelId","title","coverUrl","summary","url"}。
+  static const int material = 125;
+
   /// 好友添加通知（系统消息）。
   static const int friendAdded = 1204;
 
@@ -237,6 +240,36 @@ class CardPayload {
 
   /// 名片标签文案（对齐 H5 getCardLabelInfo）。
   String get label => isGroupCard ? '群名片' : '个人名片';
+}
+
+/// 频道素材消息 content 结构（对齐 H5 MaterialMessage）：
+/// 频道运营推送的图文卡片；url 非空为外链，否则按 materialId 拉详情。
+class MaterialPayload {
+  final int materialId;
+  final int channelId;
+  final String title;
+  final String coverUrl;
+  final String summary;
+  final String url;
+
+  const MaterialPayload({
+    required this.materialId,
+    required this.channelId,
+    required this.title,
+    this.coverUrl = '',
+    this.summary = '',
+    this.url = '',
+  });
+
+  factory MaterialPayload.fromJson(Map<String, dynamic> json) =>
+      MaterialPayload(
+        materialId: asInt(json['materialId']),
+        channelId: asInt(json['channelId']),
+        title: asString(json['title']),
+        coverUrl: asString(json['coverUrl']),
+        summary: asString(json['summary']),
+        url: asString(json['url']),
+      );
 }
 
 /// 引用信息（content JSON 的 quote 字段，对齐 H5 QuoteMessage）。
@@ -625,6 +658,12 @@ class ChatMessage {
             : null)
       : null;
 
+  /// 频道素材 content 解析（125）；非素材消息返回 null。
+  MaterialPayload? get materialPayload =>
+      type == ChatMsgType.material && contentMap['materialId'] != null
+          ? MaterialPayload.fromJson(contentMap)
+          : null;
+
   /// 名片消息 payload（非名片消息返回 null）。
   CardPayload? get cardPayload => type == ChatMsgType.card
       ? (contentMap['targetId'] != null &&
@@ -693,6 +732,10 @@ class ChatMessage {
       case ChatMsgType.card:
         final card = cardPayload;
         return card != null ? '[${card.label}] ${card.name}' : '[名片]';
+      case ChatMsgType.material:
+        // 频道素材摘要（对齐 H5：[频道] 标题）
+        final m = materialPayload;
+        return m != null && m.title.isNotEmpty ? '[频道] ${m.title}' : '[频道]';
       case ChatMsgType.rtcCallStart:
       case ChatMsgType.rtcCallEnd:
         // 通话消息：按会话类型给摘要（私聊 [语音通话] / 群聊 tip 文案）
@@ -720,7 +763,7 @@ class ChatMessage {
           return text.isNotEmpty ? text : '[群通知]';
         }
         if (type == ChatMsgType.recallSignal) return '[消息已撤回]';
-        // 125 频道素材等：非聊天主体消息
+        // 其余未实现类型：非聊天主体消息
         return '[暂不支持的消息类型]';
     }
   }

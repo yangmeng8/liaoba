@@ -5,6 +5,7 @@ import 'pages/logInAndSignUp/login_page.dart';
 import 'pages/me/me_page.dart';
 import 'pages/messages/messages_page.dart';
 import 'rtc/rtc_controller.dart';
+import 'services/auth_api.dart';
 import 'services/auth_manager.dart';
 import 'services/im_websocket.dart';
 import 'shared/app_colors.dart';
@@ -27,6 +28,11 @@ Future<void> main() async {
   // 注入 RTC 全局导航 Key（来电信令自动拉起通话页）；
   // 触发 RtcController 单例构造，启动 WebSocket 信令监听
   RtcController.instance.navigatorKey = _rootNavigatorKey;
+  // 恢复登录态后补拉用户资料与权限码（昵称/头像/permissions 缓存；
+  // 异步执行不阻塞首帧，401 时会自动跳登录页）
+  if (AuthManager.instance.isLoggedIn) {
+    AuthApi.loadUserProfile().catchError((Object _) {});
+  }
   runApp(const LiaobaApp());
 }
 

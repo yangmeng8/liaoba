@@ -39,6 +39,7 @@ import 'face_picker_sheet.dart';
 import 'group_settings_page.dart';
 import 'hold_to_talk_button.dart';
 import '../contacts/user_profile_page.dart';
+import 'material_detail_page.dart';
 
 /// 聊天页（对应 H5 MessagePanel）：
 /// - 首屏 maxId=null 拉最新一页；reverse ListView 向上滚动 maxId 游标翻页
@@ -1767,6 +1768,7 @@ class _ChatPageState extends State<ChatPage> {
         return _MessageItem(
           message: message,
           older: older,
+          conversationType: widget.type.value,
           showReadState: _isPrivate,
           showGroupReadStatus: _isGroup,
           peerMaxReadId: _peerMaxReadId,
@@ -2114,6 +2116,9 @@ class _MessageItem extends StatelessWidget {
   final ChatMessage message;
   final ChatMessage? older;
 
+  /// 会话类型（ImConversationType.value；频道素材消息的居中/无头像样式用）。
+  final int conversationType;
+
   /// 发送人头像地址（空串时 ImAvatar 走字母色卡兜底）。
   final String avatarUrl;
 
@@ -2189,6 +2194,7 @@ class _MessageItem extends StatelessWidget {
   const _MessageItem({
     required this.message,
     required this.older,
+    required this.conversationType,
     required this.avatarUrl,
     required this.avatarName,
     required this.showReadState,
@@ -2398,6 +2404,33 @@ class _MessageItem extends StatelessWidget {
                 ),
         child: _CardBubbleBody(payload: card),
       );
+    } else if (message.type == ChatMsgType.material &&
+        message.materialPayload != null) {
+      // 频道素材气泡：点击 url 优先（复制外链），否则按 materialId 进素材详情
+      //（对齐 H5 handleMaterialClick）
+      final m = message.materialPayload!;
+      content = GestureDetector(
+        onTap: selectionMode
+            ? null
+            : () {
+                if (m.url.isNotEmpty) {
+                  Clipboard.setData(ClipboardData(text: m.url));
+                  ScaffoldMessenger.of(context)
+                    ..hideCurrentSnackBar()
+                    ..showSnackBar(
+                        const SnackBar(content: Text('链接已复制，请在浏览器打开')));
+                  return;
+                }
+                if (m.materialId > 0) {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => MaterialDetailPage(id: m.materialId),
+                    ),
+                  );
+                }
+              },
+        child: _MaterialBubbleBody(payload: m),
+      );
     } else {
       content = Text(
         message.displayText,
@@ -2410,10 +2443,11 @@ class _MessageItem extends StatelessWidget {
     }
 
     final isVoice = message.type == ChatMsgType.voice;
-    // 表情/图片/视频为 plain 气泡（对齐 H5）：不加背景色，直接透出会话背景
+    // 表情/图片/视频/频道素材为 plain 气泡（对齐 H5）：不加背景色，直接透出会话背景
     final isPlainMedia = message.type == ChatMsgType.face ||
         message.type == ChatMsgType.image ||
-        message.type == ChatMsgType.video;
+        message.type == ChatMsgType.video ||
+        message.type == ChatMsgType.material;
 
     // 引用块：被引用消息摘要显示在气泡内容上方（纯媒体大图除外）
     final quote = message.quotePayload;
@@ -2446,9 +2480,10 @@ class _MessageItem extends StatelessWidget {
         constraints: const BoxConstraints(maxWidth: 260),
         padding: (message.type == ChatMsgType.face ||
                 message.type == ChatMsgType.image ||
-                message.type == ChatMsgType.video)
+                message.type == ChatMsgType.video ||
+                message.type == ChatMsgType.material)
             ? EdgeInsets
-                  .zero // 表情/图片/视频大图不加内边距
+                  .zero // 表情/图片/视频/频道素材大图不加内边距
             : const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
         decoration: BoxDecoration(
           color: isPlainMedia
@@ -2512,23 +2547,31 @@ class _MessageItem extends StatelessWidget {
             child: ImAvatar(src: avatarUrl, name: avatarName, size: 40),
           );
 
+    // 频道素材消息（对齐 H5 isChannelMaterial）：无头像、居中展示、无状态角标
+    final isChannelMaterial =
+        conversationType == ImConversationType.channel.value &&
+            message.type == ChatMsgType.material;
+
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
-        mainAxisAlignment: isSelf
-            ? MainAxisAlignment.end
-            : MainAxisAlignment.start,
+        mainAxisAlignment: isChannelMaterial
+            ? MainAxisAlignment.center
+            : (isSelf ? MainAxisAlignment.end : MainAxisAlignment.start),
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (!isSelf) avatar,
-          if (isSelf) ..._buildStateIcon(colors, sending, failed),
+          if (!isSelf && !isChannelMaterial) avatar,
+          if (isSelf && !isChannelMaterial)
+            ..._buildStateIcon(colors, sending, failed),
           Flexible(
             child: Padding(
               // 头像与气泡的间距（两侧对称 8）
-              padding: EdgeInsets.only(
-                left: isSelf ? 0 : 8,
-                right: isSelf ? 8 : 0,
-              ),
+              padding: isChannelMaterial
+                  ? EdgeInsets.zero
+                  : EdgeInsets.only(
+                      left: isSelf ? 0 : 8,
+                      right: isSelf ? 8 : 0,
+                    ),
               child: Column(
                 crossAxisAlignment: isSelf
                     ? CrossAxisAlignment.end
@@ -2537,8 +2580,9 @@ class _MessageItem extends StatelessWidget {
               ),
             ),
           ),
-          if (isSelf) avatar,
-          if (!isSelf) ..._buildStateIcon(colors, sending, failed),
+          if (isSelf && !isChannelMaterial) avatar,
+          if (!isSelf && !isChannelMaterial)
+            ..._buildStateIcon(colors, sending, failed),
         ],
       ),
     );
@@ -2999,6 +3043,52 @@ class _CardBubbleBody extends StatelessWidget {
                   style: TextStyle(fontSize: 12, color: colors.muted),
                 ),
               ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 频道素材气泡体（对齐 H5 material-bubble 频道分支）：
+/// 封面大图（宽满/高110）+ 标题；plain 透出背景，点击进详情/复制外链。
+class _MaterialBubbleBody extends StatelessWidget {
+  final MaterialPayload payload;
+
+  const _MaterialBubbleBody({required this.payload});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final cover = normalizeFaceUrl(payload.coverUrl);
+    return SizedBox(
+      width: 230,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (cover.isNotEmpty)
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: Image.network(
+                cover,
+                width: double.infinity,
+                height: 110,
+                fit: BoxFit.cover,
+                errorBuilder: (_, _, _) => const SizedBox(height: 110),
+              ),
+            ),
+          if (cover.isNotEmpty) const SizedBox(height: 6),
+          Text(
+            payload.title.isEmpty ? '频道消息' : payload.title,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 15,
+              height: 1.35,
+              fontWeight: FontWeight.w600,
+              color: colors.text,
             ),
           ),
         ],

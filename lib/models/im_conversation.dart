@@ -323,6 +323,43 @@ class ImChannel {
   }
 }
 
+/// 频道素材详情（对应后端 ImChannelMaterialRespVO；content 为富文本 HTML）。
+class ImChannelMaterial {
+  final int id;
+  final int channelId;
+  final String title;
+  final String coverUrl;
+  final String summary;
+
+  /// 富文本正文（HTML；客户端按纯文本清洗渲染）。
+  final String content;
+
+  /// 外链（非空时展示"查看原文"）。
+  final String url;
+
+  const ImChannelMaterial({
+    required this.id,
+    required this.channelId,
+    required this.title,
+    required this.coverUrl,
+    required this.summary,
+    required this.content,
+    required this.url,
+  });
+
+  factory ImChannelMaterial.fromJson(Map<String, dynamic> json) {
+    return ImChannelMaterial(
+      id: asInt(json['id']),
+      channelId: asInt(json['channelId']),
+      title: asString(json['title']),
+      coverUrl: asString(json['coverUrl']),
+      summary: asString(json['summary']),
+      content: asString(json['content']),
+      url: asString(json['url']),
+    );
+  }
+}
+
 /// 客户端聚合出的会话（无服务端接口，由消息流 + 元数据计算）。
 class ImConversation {
   final ImConversationType type;

@@ -123,7 +123,7 @@ class AuthApi {
     }
   }
 
-  /// 拉取登录用户资料（昵称/头像）并缓存（对应 H5 登录后调用的权限信息接口）。
+  /// 拉取登录用户资料（昵称/头像/权限码）并缓存（对应 H5 登录后调用的权限信息接口）。
   static Future<void> loadUserProfile() async {
     final resp = await ApiClient.dio
         .get('/admin-api/system/auth/get-permission-info');
@@ -134,6 +134,12 @@ class AuthApi {
         nickname: (user['nickname'] ?? '').toString(),
         avatar: (user['avatar'] ?? '').toString(),
       );
+    }
+    // 权限码列表（管理端功能显隐用；超级管理员为 ["*:*:*"]）
+    final perms = data is Map ? data['permissions'] : null;
+    if (perms is List) {
+      AuthManager.instance.permissions =
+          perms.map((e) => e.toString()).toList();
     }
   }
 

@@ -87,6 +87,17 @@ class ImApi {
         .toList();
   }
 
+  /// 获得频道素材详情（频道素材消息点击后渲染正文）。
+  static Future<ImChannelMaterial> getChannelMaterial({
+    required int id,
+  }) async {
+    final resp = await ApiClient.dio.get(
+      '/admin-api/im/channel/material/get',
+      queryParameters: {'id': id},
+    );
+    return ImChannelMaterial.fromJson(ApiClient.unwrap(resp));
+  }
+
   /// ==================== 群设置页接口（对应后端 ImGroupController） ====================
 
   /// 获得群详情（含我的成员视角：joinStatus/groupRemark/silent）。

@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import '../../services/auth_manager.dart';
 import '../../shared/app_theme.dart';
 import 'chat_settings_page.dart';
 import 'favorites_page.dart';
 import 'my_qrcode_page.dart';
+import 'notice/notice_list_page.dart';
 import 'notification_settings_page.dart';
 import 'profile_page.dart';
 import 'general/general_settings_page.dart';
@@ -35,6 +37,10 @@ class MePage extends StatelessWidget {
               MaterialPageRoute(
                   builder: (_) => const NotificationSettingsPage()),
             );
+      case '系统公告':
+        return () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const NoticeListPage()),
+            );
       case '通用':
         return () => Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => const GeneralSettingsPage()),
@@ -52,6 +58,9 @@ class MePage extends StatelessWidget {
       (Icons.chat_outlined, '聊天设置'),
       (Icons.palette_outlined, '外观设置'),
       (Icons.smart_toy_outlined, '通用'),
+      // 系统公告（管理端入口，需 system:notice:query 权限才显示）
+      if (AuthManager.instance.hasAccess('system:notice:query'))
+        (Icons.campaign_outlined, '系统公告'),
     ];
     return Column(
       children: [

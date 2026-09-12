@@ -130,6 +130,8 @@ class _LoginPageState extends State<LoginPage>
         }
         await AuthApi.passwordLogin(mobile: account, password: password);
       }
+      // 登录成功即拉取用户资料与权限码（昵称/头像/permissions 缓存）
+      await AuthApi.loadUserProfile();
       _enterHome();
     } catch (e) {
       _toast(ApiClient.errorMessage(e));
