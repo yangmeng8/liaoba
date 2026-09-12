@@ -620,6 +620,7 @@ class ImApi {
   static Future<void> applyFriendRequest({
     required int toUserId,
     String applyContent = '',
+    String displayName = '',
     int addSource = 1,
   }) async {
     await ApiClient.dio.post(
@@ -627,8 +628,80 @@ class ImApi {
       data: {
         'toUserId': toUserId,
         'applyContent': applyContent,
+        'displayName': displayName,
         'addSource': addSource,
       },
     );
+  }
+
+  /// ==================== 通讯录：好友申请中心（ImFriendRequestController） ====================
+
+  /// 查询「我相关」的好友申请列表（收到 + 发出；maxId 游标分页，首页不传）。
+  static Future<List<ImFriendRequest>> getFriendRequestList({
+    int? maxId,
+    required int limit,
+  }) async {
+    final resp = await ApiClient.dio.get(
+      '/admin-api/im/friend-request/list',
+      queryParameters: {
+        'maxId': ?maxId,
+        'limit': limit,
+      },
+    );
+    final data = ApiClient.unwrap(resp);
+    if (data is! List) return const [];
+    return data
+        .map((e) => ImFriendRequest.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// 同意好友申请。
+  static Future<void> agreeFriendRequest({required int id}) async {
+    await ApiClient.dio.put(
+      '/admin-api/im/friend-request/agree',
+      queryParameters: {'id': id},
+    );
+  }
+
+  /// 拒绝好友申请（handleContent 拒绝理由，选填）。
+  static Future<void> refuseFriendRequest({
+    required int id,
+    String handleContent = '',
+  }) async {
+    await ApiClient.dio.put(
+      '/admin-api/im/friend-request/refuse',
+      queryParameters: {
+        'id': id,
+        if (handleContent.isNotEmpty) 'handleContent': handleContent,
+      },
+    );
+  }
+
+  /// 我管理的群的所有待处理进群申请（申请中心加群 tab）。
+  static Future<List<ImGroupRequest>> getUnhandledGroupRequestList() async {
+    final resp = await ApiClient.dio
+        .get('/admin-api/im/group-request/unhandled-list');
+    final data = ApiClient.unwrap(resp);
+    if (data is! List) return const [];
+    return data
+        .map((e) => ImGroupRequest.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// 创建群聊（name + 初始成员；joinApproval 进群是否需审批）。
+  static Future<ImGroup> createGroup({
+    required String name,
+    required List<int> memberUserIds,
+    bool joinApproval = false,
+  }) async {
+    final resp = await ApiClient.dio.post(
+      '/admin-api/im/group/create',
+      data: {
+        'name': name,
+        'memberUserIds': memberUserIds,
+        'joinApproval': joinApproval,
+      },
+    );
+    return ImGroup.fromJson(ApiClient.unwrap(resp));
   }
 }

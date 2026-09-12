@@ -30,6 +30,12 @@ class ImFriend {
   final String nickname;
   final String avatar;
 
+  /// 备注拼音（后端预计算下发，字母分桶/搜索用；空格分隔音节）。
+  final String displayNamePinyin;
+
+  /// 昵称拼音（后端预计算下发）。
+  final String nicknamePinyin;
+
   /// 添加来源（1=搜索 2=群聊 3=扫码 4=名片）。
   final int addSource;
 
@@ -46,6 +52,8 @@ class ImFriend {
     required this.status,
     required this.nickname,
     required this.avatar,
+    this.displayNamePinyin = '',
+    this.nicknamePinyin = '',
     this.addSource = 0,
     this.addTime,
   });
@@ -61,6 +69,8 @@ class ImFriend {
       status: asInt(json['status']),
       nickname: asString(json['nickname']),
       avatar: asString(json['avatar']),
+      displayNamePinyin: asString(json['displayNamePinyin']),
+      nicknamePinyin: asString(json['nicknamePinyin']),
       addSource: asInt(json['addSource']),
       addTime: DateTime.tryParse(asString(json['addTime'])),
     );
@@ -253,6 +263,73 @@ class ImGroupRequest {
   /// 展示名：申请人昵称兜底「用户N」。
   String get shownName =>
       userNickname.isNotEmpty ? userNickname : '用户$userId';
+
+  /// 是否待处理。
+  bool get pending => handleResult == 0;
+
+  /// 处理结果文案。
+  String get handleResultLabel => switch (handleResult) {
+    1 => '已同意',
+    2 => '已拒绝',
+    _ => '待处理',
+  };
+}
+
+/// 好友申请（对应后端 ImFriendRequestRespVO；list 返回「我相关」的双向列表）。
+class ImFriendRequest {
+  final int id;
+  final int fromUserId;
+  final int toUserId;
+
+  /// 处理结果（0=未处理 1=同意 2=拒绝）。
+  final int handleResult;
+  final String applyContent;
+  final String handleContent;
+
+  /// 添加来源（1=搜索 2=群聊 3=扫码 4=名片）。
+  final int addSource;
+  final DateTime? handleTime;
+  final DateTime? createTime;
+
+  /// 申请/被申请人信息（后端冗余回填）。
+  final String fromNickname;
+  final String fromAvatar;
+  final String toNickname;
+  final String toAvatar;
+
+  const ImFriendRequest({
+    required this.id,
+    required this.fromUserId,
+    required this.toUserId,
+    required this.handleResult,
+    this.applyContent = '',
+    this.handleContent = '',
+    this.addSource = 0,
+    this.handleTime,
+    this.createTime,
+    this.fromNickname = '',
+    this.fromAvatar = '',
+    this.toNickname = '',
+    this.toAvatar = '',
+  });
+
+  factory ImFriendRequest.fromJson(Map<String, dynamic> json) {
+    return ImFriendRequest(
+      id: asInt(json['id']),
+      fromUserId: asInt(json['fromUserId']),
+      toUserId: asInt(json['toUserId']),
+      handleResult: asInt(json['handleResult']),
+      applyContent: asString(json['applyContent']),
+      handleContent: asString(json['handleContent']),
+      addSource: asInt(json['addSource']),
+      handleTime: DateTime.tryParse(json['handleTime']?.toString() ?? ''),
+      createTime: DateTime.tryParse(json['createTime']?.toString() ?? ''),
+      fromNickname: asString(json['fromNickname']),
+      fromAvatar: asString(json['fromAvatar']),
+      toNickname: asString(json['toNickname']),
+      toAvatar: asString(json['toAvatar']),
+    );
+  }
 
   /// 是否待处理。
   bool get pending => handleResult == 0;

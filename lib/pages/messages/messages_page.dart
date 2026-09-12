@@ -78,13 +78,13 @@ class _MessagesPageState extends State<MessagesPage> {
           ],
         ),
         // 父级控制 FilterChips 的左边距（与 AppHeader 的 20 接近，但更靠左 2px）
-        Padding(
-          padding: const EdgeInsets.only(left: 18),
-          child: FilterChips(
-            selectedIndex: _filterIndex,
-            onChanged: (i) => setState(() => _filterIndex = i),
-          ),
-        ),
+        // Padding(
+        //   padding: const EdgeInsets.only(left: 18),
+        //   child: FilterChips(
+        //     selectedIndex: _filterIndex,
+        //     onChanged: (i) => setState(() => _filterIndex = i),
+        //   ),
+        // ),
         // 订阅 ConversationStore：WebSocket 推送触发的补拉完成后实时刷新列表
         Expanded(
           child: ListenableBuilder(

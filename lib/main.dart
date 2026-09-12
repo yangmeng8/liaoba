@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'pages/calls/calls_page.dart';
 import 'pages/contacts/contacts_page.dart';
 import 'pages/logInAndSignUp/login_page.dart';
 import 'pages/me/me_page.dart';
@@ -97,7 +96,7 @@ class HomeShell extends StatefulWidget {
 
 class _HomeShellState extends State<HomeShell> {
   int index = 0;
-  final pages = const [MessagesPage(), ContactsPage(), CallsPage(), MePage()];
+  final pages = const [MessagesPage(), ContactsPage(), MePage()];
 
   @override
   void initState() {
@@ -142,11 +141,6 @@ class _HomeShellState extends State<HomeShell> {
             icon: Icon(Icons.person_outline, color: unselectedColor),
             selectedIcon: Icon(Icons.person, color: selectedIconColor),
             label: '通讯录',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.phone_in_talk_outlined, color: unselectedColor),
-            selectedIcon: Icon(Icons.phone_in_talk, color: selectedIconColor),
-            label: '通话',
           ),
           NavigationDestination(
             icon: Icon(Icons.account_circle_outlined, color: unselectedColor),

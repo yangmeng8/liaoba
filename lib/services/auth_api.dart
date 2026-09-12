@@ -153,6 +153,18 @@ class AuthApi {
     if (data is! Map<String, dynamic>) return null;
     return SimpleUser.fromJson(data);
   }
+
+  /// 全量精简用户列表（添加好友的用户选择器用；
+  /// 客户端本地搜索 + 隐藏自己 + 已好友置灰）。
+  static Future<List<SimpleUser>> getSimpleUserList() async {
+    final resp = await ApiClient.dio
+        .get('/admin-api/system/user/simple-list');
+    final data = ApiClient.unwrap(resp);
+    if (data is! List) return const [];
+    return data
+        .map((e) => SimpleUser.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
 }
 
 /// 用户精简资料（对应后端 UserSimpleRespVO）。
