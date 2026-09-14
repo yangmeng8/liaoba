@@ -69,42 +69,21 @@ class _ContactsPageState extends State<ContactsPage> {
   /// 字母分桶（非搜索态）。
   List<FriendBucket> get _buckets => buildFriendBuckets(activeFriends(_friends));
 
-  /// 右上角「+」：action sheet（添加好友 / 创建群聊，对齐 H5）。
-  Future<void> _showAddSheet() async {
-    final action = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: context.colors.card,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.person_add_alt_1_outlined, size: 26),
-              title: const Text('添加好友', style: TextStyle(fontSize: 16)),
-              onTap: () => Navigator.of(ctx).pop('friend'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.group_add_outlined, size: 26),
-              title: const Text('创建群聊', style: TextStyle(fontSize: 16)),
-              onTap: () => Navigator.of(ctx).pop('group'),
-            ),
-          ],
+  /// 右上角「+」：微信风格下拉菜单（添加好友 / 创建群聊，按钮正下方弹出）。
+  void _showAddMenu(BuildContext anchorContext) {
+    showHeaderMenu(
+      anchorContext: anchorContext,
+      items: const [
+        HeaderMenuItem(icon: Icons.person_add_alt_1_outlined, label: '添加好友'),
+        HeaderMenuItem(icon: Icons.group_add_outlined, label: '创建群聊'),
+      ],
+      onSelect: (i) => Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) =>
+              i == 0 ? const FriendApplyPage() : const CreateGroupPage(),
         ),
       ),
     );
-    if (!mounted || action == null) return;
-    if (action == 'friend') {
-      Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => const FriendApplyPage()),
-      );
-    } else {
-      Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => const CreateGroupPage()),
-      );
-    }
   }
 
   /// 索引条点击 → 滚动到对应分组头。
@@ -125,9 +104,11 @@ class _ContactsPageState extends State<ContactsPage> {
         AppHeader(
           title: '通讯录',
           actions: [
-            IconButton(
-              onPressed: _showAddSheet,
-              icon: const Icon(Icons.add_circle_outline, size: 25),
+            Builder(
+              builder: (btnCtx) => IconButton(
+                onPressed: () => _showAddMenu(btnCtx),
+                icon: const Icon(Icons.add_circle_outline, size: 25),
+              ),
             ),
           ],
         ),
@@ -150,7 +131,7 @@ class _ContactsPageState extends State<ContactsPage> {
   Widget _buildSearchBox(ThemeColors colors) {
     return Container(
       height: 36,
-      margin: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+      margin: const EdgeInsets.fromLTRB(20, 10, 20, 10),
       decoration: BoxDecoration(
         color: colors.card,
         borderRadius: BorderRadius.circular(14),

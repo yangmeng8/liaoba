@@ -135,6 +135,166 @@ class _SearchBoxState extends State<SearchBox> {
   }
 }
 
+/// 头部下拉菜单项（图标 + 文字）。
+class HeaderMenuItem {
+  final IconData icon;
+  final String label;
+  const HeaderMenuItem({required this.icon, required this.label});
+}
+
+/// 微信风格头部下拉菜单（按钮正下方弹出 + 小箭头 + 点外部关闭 + 入场动画）。
+/// 便捷入口见 [showHeaderMenu]。
+void showHeaderMenu({
+  required BuildContext anchorContext,
+  required List<HeaderMenuItem> items,
+  required ValueChanged<int> onSelect,
+}) {
+  final render = anchorContext.findRenderObject();
+  if (render is! RenderBox) return;
+  // 按钮底部右角全局坐标 → 菜单锚点（右缘对齐按钮，顶部贴按钮下缘）
+  final anchor = render.localToGlobal(render.size.bottomRight(Offset.zero));
+  final overlay = Overlay.of(anchorContext);
+  late final OverlayEntry entry;
+  entry = OverlayEntry(
+    builder: (_) => HeaderMenuOverlay(
+      anchorTop: anchor.dy,
+      anchorRight: MediaQuery.of(anchorContext).size.width - anchor.dx,
+      items: items,
+      onDismiss: () => entry.remove(),
+      onSelect: (i) {
+        entry.remove();
+        onSelect(i);
+      },
+    ),
+  );
+  overlay.insert(entry);
+}
+
+/// 下拉菜单浮层本体（一般经 [showHeaderMenu] 使用）。
+class HeaderMenuOverlay extends StatelessWidget {
+  /// 菜单顶部锚点（全局 y 坐标）。
+  final double anchorTop;
+
+  /// 菜单右缘距屏幕右缘距离。
+  final double anchorRight;
+
+  final List<HeaderMenuItem> items;
+  final VoidCallback onDismiss;
+  final ValueChanged<int> onSelect;
+
+  const HeaderMenuOverlay({
+    super.key,
+    required this.anchorTop,
+    required this.anchorRight,
+    required this.items,
+    required this.onDismiss,
+    required this.onSelect,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Stack(children: [
+      // 全屏透明屏障：点击外部关闭
+      Positioned.fill(
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: onDismiss,
+        ),
+      ),
+      Positioned(
+        top: anchorTop,
+        right: anchorRight,
+        child: TweenAnimationBuilder<double>(
+          tween: Tween(begin: 0, end: 1),
+          duration: const Duration(milliseconds: 150),
+          builder: (context, t, child) => Opacity(
+            opacity: t,
+            child: Transform.translate(
+              offset: Offset(0, -6 * (1 - t)),
+              child: child,
+            ),
+          ),
+          child: Material(
+            color: Colors.transparent,
+            child: Container(
+              width: 160,
+              decoration: BoxDecoration(
+                color: colors.card,
+                borderRadius: BorderRadius.circular(12),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.18),
+                    blurRadius: 24,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // 小箭头指向锚点按钮（右缩 15：箭头中心对准 48 宽按钮的中心）
+                  Padding(
+                    padding: const EdgeInsets.only(right: 15),
+                    child: CustomPaint(
+                      size: const Size(18, 7),
+                      painter: _MenuArrowPainter(color: colors.card),
+                    ),
+                  ),
+                  for (var i = 0; i < items.length; i++) ...[
+                    if (i > 0)
+                      Divider(
+                          height: 1, indent: 14, endIndent: 14, color: colors.divider),
+                    InkWell(
+                      onTap: () => onSelect(i),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 13),
+                        child: Row(
+                          children: [
+                            Icon(items[i].icon, size: 21, color: colors.text),
+                            const SizedBox(width: 10),
+                            Text(
+                              items[i].label,
+                              style: TextStyle(fontSize: 15, color: colors.text),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    ]);
+  }
+}
+
+/// 菜单顶部小箭头（倒三角）。
+class _MenuArrowPainter extends CustomPainter {
+  final Color color;
+  const _MenuArrowPainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+    final path = Path()
+      ..moveTo(0, size.height)
+      ..lineTo(size.width / 2, 0)
+      ..lineTo(size.width, size.height)
+      ..close();
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _MenuArrowPainter old) => old.color != color;
+}
+
 class EmptyState extends StatelessWidget {
   final String label;
   const EmptyState({super.key, required this.label});

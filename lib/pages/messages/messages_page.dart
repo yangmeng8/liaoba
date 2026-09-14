@@ -9,6 +9,8 @@ import '../../shared/im_avatar.dart';
 import '../../shared/widgets.dart';
 import '../../stores/conversation_store.dart';
 import '../chat/chat_page.dart';
+import '../contacts/create_group_page.dart';
+import '../contacts/friend_apply_page.dart';
 
 /// 消息 Tab：会话列表（客户端由消息流聚合，对应 H5 conversationStore）。
 class MessagesPage extends StatefulWidget {
@@ -49,6 +51,23 @@ class _MessagesPageState extends State<MessagesPage> {
     }
   }
 
+  /// 加号下拉菜单（微信风格：浮层定位在按钮正下方，非底部弹层）。
+  void _showPlusMenu(BuildContext anchorContext) {
+    showHeaderMenu(
+      anchorContext: anchorContext,
+      items: const [
+        HeaderMenuItem(icon: Icons.person_add_alt_1_outlined, label: '添加好友'),
+        HeaderMenuItem(icon: Icons.groups_outlined, label: '创建群聊'),
+      ],
+      onSelect: (i) => Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) =>
+              i == 0 ? const FriendApplyPage() : const CreateGroupPage(),
+        ),
+      ),
+    );
+  }
+
   /// 按当前 chip + 搜索关键词过滤会话列表。
   List<ImConversation> get _filtered {
     final list = ConversationStore.instance.conversations;
@@ -82,9 +101,11 @@ class _MessagesPageState extends State<MessagesPage> {
             //   onPressed: () {},
             //   icon: const Icon(Icons.edit_outlined, size: 24),
             // ),
-            IconButton(
-              onPressed: () {},
-              icon: const Icon(Icons.add_circle_outline, size: 25),
+            Builder(
+              builder: (btnCtx) => IconButton(
+                onPressed: () => _showPlusMenu(btnCtx),
+                icon: const Icon(Icons.add_circle_outline, size: 25),
+              ),
             ),
           ],
         ),
