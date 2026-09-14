@@ -6,11 +6,15 @@ class AppHeader extends StatelessWidget {
   final String title;
   final List<Widget> actions;
   final bool showSearch;
+
+  /// 搜索框输入回调（showSearch 时生效）
+  final ValueChanged<String>? onSearchChanged;
   const AppHeader({
     super.key,
     required this.title,
     this.actions = const [],
     this.showSearch = false,
+    this.onSearchChanged,
   });
   @override
   Widget build(BuildContext context) {
@@ -41,7 +45,7 @@ class AppHeader extends StatelessWidget {
                       )),
                 ],
               ),
-              if (showSearch) const SearchBox(inHeader: true),
+              if (showSearch) SearchBox(inHeader: true, onChanged: onSearchChanged),
             ],
           ),
         ),
@@ -50,15 +54,47 @@ class AppHeader extends StatelessWidget {
   }
 }
 
-class SearchBox extends StatelessWidget {
+/// 可输入搜索框：输入即回调（onChanged），有内容时显示清除按钮。
+class SearchBox extends StatefulWidget {
   final bool inHeader;
-  const SearchBox({super.key, this.inHeader = false});
+  final ValueChanged<String>? onChanged;
+  final String hintText;
+  const SearchBox({
+    super.key,
+    this.inHeader = false,
+    this.onChanged,
+    this.hintText = '搜索',
+  });
+  @override
+  State<SearchBox> createState() => _SearchBoxState();
+}
+
+class _SearchBoxState extends State<SearchBox> {
+  final TextEditingController _ctrl = TextEditingController();
+  bool _hasText = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl.addListener(() {
+      final has = _ctrl.text.isNotEmpty;
+      if (has != _hasText) setState(() => _hasText = has);
+      widget.onChanged?.call(_ctrl.text);
+    });
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
     return Container(
-      height: inHeader ? 36 : 42,
-      margin: inHeader
+      height: widget.inHeader ? 36 : 42,
+      margin: widget.inHeader
           ? const EdgeInsets.only(top: 12)
           : const EdgeInsets.fromLTRB(18, 0, 18, 12),
       decoration: BoxDecoration(
@@ -70,7 +106,29 @@ class SearchBox extends StatelessWidget {
           const SizedBox(width: 13),
           Icon(Icons.search, size: 22, color: colors.muted),
           const SizedBox(width: 8),
-          Text('搜索', style: TextStyle(fontSize: 16, color: colors.muted)),
+          Expanded(
+            child: TextField(
+              controller: _ctrl,
+              textInputAction: TextInputAction.search,
+              // isCollapsed：去掉内边距，保证固定高度容器内不溢出
+              decoration: InputDecoration(
+                isCollapsed: true,
+                border: InputBorder.none,
+                hintText: widget.hintText,
+                hintStyle: TextStyle(fontSize: 16, color: colors.muted),
+                contentPadding: EdgeInsets.zero,
+              ),
+              style: TextStyle(fontSize: 15, color: colors.text),
+            ),
+          ),
+          if (_hasText) ...[
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: _ctrl.clear,
+              child: Icon(Icons.cancel, size: 18, color: colors.muted),
+            ),
+          ],
+          const SizedBox(width: 13),
         ],
       ),
     );

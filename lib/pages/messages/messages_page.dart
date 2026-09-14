@@ -25,6 +25,9 @@ class _MessagesPageState extends State<MessagesPage> {
   /// 过滤条件：0=全部 1=特别关注 2=未读 3=群聊。
   int _filterIndex = 0;
 
+  /// 搜索关键词（会话标题 + 最后一条消息内容）。
+  String _keyword = '';
+
   @override
   void initState() {
     super.initState();
@@ -46,15 +49,22 @@ class _MessagesPageState extends State<MessagesPage> {
     }
   }
 
-  /// 按当前 chip 过滤会话列表。
+  /// 按当前 chip + 搜索关键词过滤会话列表。
   List<ImConversation> get _filtered {
     final list = ConversationStore.instance.conversations;
-    return switch (_filterIndex) {
+    final byChip = switch (_filterIndex) {
       1 => list.where((c) => c.pinned).toList(),
       2 => list.where((c) => c.unreadCount > 0).toList(),
       3 => list.where((c) => c.type == ImConversationType.group).toList(),
       _ => list,
     };
+    final kw = _keyword.trim().toLowerCase();
+    if (kw.isEmpty) return byChip;
+    return byChip
+        .where((c) =>
+            c.title.toLowerCase().contains(kw) ||
+            c.lastMessageText.toLowerCase().contains(kw))
+        .toList();
   }
 
   @override
@@ -66,11 +76,12 @@ class _MessagesPageState extends State<MessagesPage> {
         AppHeader(
           title: '消息',
           showSearch: true,
+          onSearchChanged: (kw) => setState(() => _keyword = kw),
           actions: [
-            IconButton(
-              onPressed: () {},
-              icon: const Icon(Icons.edit_outlined, size: 24),
-            ),
+            // IconButton(
+            //   onPressed: () {},
+            //   icon: const Icon(Icons.edit_outlined, size: 24),
+            // ),
             IconButton(
               onPressed: () {},
               icon: const Icon(Icons.add_circle_outline, size: 25),
@@ -109,7 +120,8 @@ class _MessagesPageState extends State<MessagesPage> {
     }
     final list = _filtered;
     if (list.isEmpty) {
-      return const EmptyState(label: '暂无任何消息');
+      // 搜索态与默认态区分空态文案
+      return EmptyState(label: _keyword.trim().isEmpty ? '暂无任何消息' : '没有匹配的会话');
     }
     return RefreshIndicator(
       color: AppColors.lime,
