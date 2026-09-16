@@ -18,7 +18,7 @@ class ImApi {
     int? maxId,
   }) async {
     final resp = await ApiClient.dio.get(
-      '/admin-api/im/message/private/list',
+      '/app-api/im/message/private/list',
       queryParameters: {
         'receiverId': receiverId,
         'limit': limit,
@@ -42,7 +42,7 @@ class ImApi {
     int? maxId,
   }) async {
     final resp = await ApiClient.dio.get(
-      '/admin-api/im/message/group/list',
+      '/app-api/im/message/group/list',
       queryParameters: {'groupId': groupId, 'limit': limit, 'maxId': ?maxId},
     );
     final data = ApiClient.unwrap(resp);
@@ -54,7 +54,7 @@ class ImApi {
 
   /// 获得当前登录用户的好友列表。
   static Future<List<ImFriend>> getFriendList() async {
-    final resp = await ApiClient.dio.get('/admin-api/im/friend/list');
+    final resp = await ApiClient.dio.get('/app-api/im/friend/list');
     final data = ApiClient.unwrap(resp);
     if (data is! List) return const [];
     return data
@@ -64,7 +64,7 @@ class ImApi {
 
   /// 获得当前登录用户的群列表（含已退群的历史群，供展示群名/头像）。
   static Future<List<ImGroup>> getGroupList() async {
-    final resp = await ApiClient.dio.get('/admin-api/im/group/list');
+    final resp = await ApiClient.dio.get('/app-api/im/group/list');
     final data = ApiClient.unwrap(resp);
     if (data is! List) return const [];
     return data
@@ -77,7 +77,7 @@ class ImApi {
     required int groupId,
   }) async {
     final resp = await ApiClient.dio.get(
-      '/admin-api/im/group-member/list',
+      '/app-api/im/group-member/list',
       queryParameters: {'groupId': groupId},
     );
     final data = ApiClient.unwrap(resp);
@@ -92,7 +92,7 @@ class ImApi {
     required int id,
   }) async {
     final resp = await ApiClient.dio.get(
-      '/admin-api/im/channel/material/get',
+      '/app-api/im/channel/material/get',
       queryParameters: {'id': id},
     );
     return ImChannelMaterial.fromJson(ApiClient.unwrap(resp));
@@ -103,7 +103,7 @@ class ImApi {
   /// 获得群详情（含我的成员视角：joinStatus/groupRemark/silent）。
   static Future<ImGroup> getGroup({required int id}) async {
     final resp = await ApiClient.dio.get(
-      '/admin-api/im/group/get',
+      '/app-api/im/group/get',
       queryParameters: {'id': id},
     );
     return ImGroup.fromJson(ApiClient.unwrap(resp));
@@ -118,7 +118,7 @@ class ImApi {
     bool? joinApproval,
   }) async {
     await ApiClient.dio.put(
-      '/admin-api/im/group/update',
+      '/app-api/im/group/update',
       data: {
         'id': id,
         if (name != null) 'name': name,
@@ -132,7 +132,7 @@ class ImApi {
   /// 解散群（仅群主）。
   static Future<void> dissolveGroup({required int id}) async {
     await ApiClient.dio.delete(
-      '/admin-api/im/group/dissolve',
+      '/app-api/im/group/dissolve',
       queryParameters: {'id': id},
     );
   }
@@ -143,7 +143,7 @@ class ImApi {
     required List<int> memberUserIds,
   }) async {
     await ApiClient.dio.post(
-      '/admin-api/im/group/invite',
+      '/app-api/im/group/invite',
       data: {'groupId': groupId, 'memberUserIds': memberUserIds},
     );
   }
@@ -151,7 +151,7 @@ class ImApi {
   /// 退出群。
   static Future<void> quitGroup({required int groupId}) async {
     await ApiClient.dio.delete(
-      '/admin-api/im/group/quit',
+      '/app-api/im/group/quit',
       queryParameters: {'groupId': groupId},
     );
   }
@@ -162,7 +162,7 @@ class ImApi {
     required List<int> memberUserIds,
   }) async {
     await ApiClient.dio.delete(
-      '/admin-api/im/group/kicking',
+      '/app-api/im/group/kicking',
       data: {'groupId': groupId, 'memberUserIds': memberUserIds},
     );
   }
@@ -173,7 +173,7 @@ class ImApi {
     required List<int> userIds,
   }) async {
     await ApiClient.dio.put(
-      '/admin-api/im/group/add-admin',
+      '/app-api/im/group/add-admin',
       data: {'id': id, 'userIds': userIds},
     );
   }
@@ -184,7 +184,7 @@ class ImApi {
     required List<int> userIds,
   }) async {
     await ApiClient.dio.put(
-      '/admin-api/im/group/remove-admin',
+      '/app-api/im/group/remove-admin',
       data: {'id': id, 'userIds': userIds},
     );
   }
@@ -195,7 +195,7 @@ class ImApi {
     required int newOwnerUserId,
   }) async {
     await ApiClient.dio.put(
-      '/admin-api/im/group/transfer-owner',
+      '/app-api/im/group/transfer-owner',
       data: {'id': id, 'newOwnerUserId': newOwnerUserId},
     );
   }
@@ -206,7 +206,7 @@ class ImApi {
     required bool mutedAll,
   }) async {
     await ApiClient.dio.put(
-      '/admin-api/im/group/mute-all',
+      '/app-api/im/group/mute-all',
       data: {'id': id, 'mutedAll': mutedAll},
     );
   }
@@ -218,7 +218,7 @@ class ImApi {
     required int mutedSeconds,
   }) async {
     await ApiClient.dio.put(
-      '/admin-api/im/group/mute-member',
+      '/app-api/im/group/mute-member',
       data: {'id': id, 'userId': userId, 'mutedSeconds': mutedSeconds},
     );
   }
@@ -229,7 +229,7 @@ class ImApi {
     required int userId,
   }) async {
     await ApiClient.dio.put(
-      '/admin-api/im/group/cancel-mute-member',
+      '/app-api/im/group/cancel-mute-member',
       data: {'id': id, 'userId': userId},
     );
   }
@@ -242,7 +242,7 @@ class ImApi {
     bool? silent,
   }) async {
     await ApiClient.dio.put(
-      '/admin-api/im/group-member/update',
+      '/app-api/im/group-member/update',
       data: {
         'groupId': groupId,
         if (displayUserName != null) 'displayUserName': displayUserName,
@@ -259,7 +259,7 @@ class ImApi {
     required int groupId,
   }) async {
     final resp = await ApiClient.dio.get(
-      '/admin-api/im/group-request/list-by-group',
+      '/app-api/im/group-request/list-by-group',
       queryParameters: {'groupId': groupId},
     );
     final data = ApiClient.unwrap(resp);
@@ -272,7 +272,7 @@ class ImApi {
   /// 同意进群申请。
   static Future<void> agreeGroupRequest({required int id}) async {
     await ApiClient.dio.put(
-      '/admin-api/im/group-request/agree',
+      '/app-api/im/group-request/agree',
       queryParameters: {'id': id},
     );
   }
@@ -283,7 +283,7 @@ class ImApi {
     String handleContent = '',
   }) async {
     await ApiClient.dio.put(
-      '/admin-api/im/group-request/refuse',
+      '/app-api/im/group-request/refuse',
       queryParameters: {'id': id, 'handleContent': handleContent},
     );
   }
@@ -295,7 +295,7 @@ class ImApi {
     required int size,
   }) async {
     final resp = await ApiClient.dio.get(
-      '/admin-api/im/message/private/pull',
+      '/app-api/im/message/private/pull',
       queryParameters: {'minId': minId, 'size': size},
     );
     final data = ApiClient.unwrap(resp);
@@ -312,7 +312,7 @@ class ImApi {
     required int size,
   }) async {
     final resp = await ApiClient.dio.get(
-      '/admin-api/im/message/group/pull',
+      '/app-api/im/message/group/pull',
       queryParameters: {'minId': minId, 'size': size},
     );
     final data = ApiClient.unwrap(resp);
@@ -329,7 +329,7 @@ class ImApi {
     required int limit,
   }) async {
     final resp = await ApiClient.dio.get(
-      '/admin-api/im/conversation-read/pull',
+      '/app-api/im/conversation-read/pull',
       queryParameters: {'lastId': ?lastId, 'limit': limit},
     );
     final data = ApiClient.unwrap(resp);
@@ -342,7 +342,7 @@ class ImApi {
   /// 获得启用的频道精简列表（频道会话的标题/头像来源）。
   static Future<List<ImChannel>> getChannelSimpleList() async {
     final resp = await ApiClient.dio.get(
-      '/admin-api/im/manager/channel/simple-list',
+      '/app-api/im/manager/channel/simple-list',
     );
     final data = ApiClient.unwrap(resp);
     if (data is! List) return const [];
@@ -357,7 +357,7 @@ class ImApi {
     required int size,
   }) async {
     final resp = await ApiClient.dio.get(
-      '/admin-api/im/channel/message/pull',
+      '/app-api/im/channel/message/pull',
       queryParameters: {'minId': minId, 'size': size},
     );
     final data = ApiClient.unwrap(resp);
@@ -380,7 +380,7 @@ class ImApi {
     bool receipt = true,
   }) async {
     final resp = await ApiClient.dio.post(
-      '/admin-api/im/message/private/send',
+      '/app-api/im/message/private/send',
       data: {
         'clientMessageId': clientMessageId,
         'receiverId': receiverId,
@@ -406,7 +406,7 @@ class ImApi {
     bool receipt = true,
   }) async {
     final resp = await ApiClient.dio.post(
-      '/admin-api/im/message/group/send',
+      '/app-api/im/message/group/send',
       data: {
         'clientMessageId': clientMessageId,
         'groupId': groupId,
@@ -431,7 +431,7 @@ class ImApi {
     required int messageId,
   }) async {
     await ApiClient.dio.put(
-      '/admin-api/im/message/private/read',
+      '/app-api/im/message/private/read',
       queryParameters: {'receiverId': receiverId, 'messageId': messageId},
     );
   }
@@ -442,7 +442,7 @@ class ImApi {
     required int messageId,
   }) async {
     await ApiClient.dio.put(
-      '/admin-api/im/message/group/read',
+      '/app-api/im/message/group/read',
       queryParameters: {'groupId': groupId, 'messageId': messageId},
     );
   }
@@ -453,7 +453,7 @@ class ImApi {
     required int messageId,
   }) async {
     await ApiClient.dio.put(
-      '/admin-api/im/channel/message/read',
+      '/app-api/im/channel/message/read',
       queryParameters: {'channelId': channelId, 'messageId': messageId},
     );
   }
@@ -461,7 +461,7 @@ class ImApi {
   /// 查询私聊对方已读到的消息编号（自己消息下「已读/未读」小字用）。
   static Future<int> getPrivateMaxReadMessageId({required int peerId}) async {
     final resp = await ApiClient.dio.get(
-      '/admin-api/im/message/private/max-read-message-id',
+      '/app-api/im/message/private/max-read-message-id',
       queryParameters: {'peerId': peerId},
     );
     return asInt(ApiClient.unwrap(resp));
@@ -474,7 +474,7 @@ class ImApi {
     required int messageId,
   }) async {
     final resp = await ApiClient.dio.get(
-      '/admin-api/im/message/group/get-read-user-ids',
+      '/app-api/im/message/group/get-read-user-ids',
       queryParameters: {'groupId': groupId, 'messageId': messageId},
     );
     final data = ApiClient.unwrap(resp);
@@ -487,7 +487,7 @@ class ImApi {
   /// 撤回私聊消息（服务端会向对方推送 RECALL 通知）。
   static Future<void> recallPrivateMessage({required int id}) async {
     await ApiClient.dio.delete(
-      '/admin-api/im/message/private/recall',
+      '/app-api/im/message/private/recall',
       queryParameters: {'id': id},
     );
   }
@@ -495,7 +495,7 @@ class ImApi {
   /// 撤回群聊消息。
   static Future<void> recallGroupMessage({required int id}) async {
     await ApiClient.dio.delete(
-      '/admin-api/im/message/group/recall',
+      '/app-api/im/message/group/recall',
       queryParameters: {'id': id},
     );
   }
@@ -516,7 +516,7 @@ class ImApi {
       'file': await MultipartFile.fromFile(filePath, filename: fileName),
     });
     final resp = await ApiClient.dio.post(
-      '/admin-api/infra/file/upload',
+      '/app-api/infra/file/upload',
       data: form,
       onSendProgress: onSendProgress,
     );
@@ -527,7 +527,7 @@ class ImApi {
 
   /// 获得所有启用的系统表情包（含 items）。
   static Future<List<ImFacePack>> getFacePackList() async {
-    final resp = await ApiClient.dio.get('/admin-api/im/face-pack/list');
+    final resp = await ApiClient.dio.get('/app-api/im/face-pack/list');
     final data = ApiClient.unwrap(resp);
     if (data is! List) return const [];
     return data
@@ -537,7 +537,7 @@ class ImApi {
 
   /// 获得我的个人表情列表。
   static Future<List<ImFaceItem>> getFaceUserItemList() async {
-    final resp = await ApiClient.dio.get('/admin-api/im/face-user-item/list');
+    final resp = await ApiClient.dio.get('/app-api/im/face-user-item/list');
     final data = ApiClient.unwrap(resp);
     if (data is! List) return const [];
     return data
@@ -553,7 +553,7 @@ class ImApi {
     String name = '',
   }) async {
     final resp = await ApiClient.dio.post(
-      '/admin-api/im/face-user-item/create',
+      '/app-api/im/face-user-item/create',
       data: {'url': url, 'name': name, 'width': width, 'height': height},
     );
     return asInt(ApiClient.unwrap(resp));
@@ -562,7 +562,7 @@ class ImApi {
   /// 删除个人表情。
   static Future<void> deleteFaceUserItem({required int id}) async {
     await ApiClient.dio.delete(
-      '/admin-api/im/face-user-item/delete',
+      '/app-api/im/face-user-item/delete',
       queryParameters: {'id': id},
     );
   }
@@ -570,7 +570,7 @@ class ImApi {
   /// 获得好友详情（备注/来源/拉黑/添加时间）。
   static Future<ImFriend?> getFriendDetail({required int friendUserId}) async {
     final resp = await ApiClient.dio.get(
-      '/admin-api/im/friend/get',
+      '/app-api/im/friend/get',
       queryParameters: {'friendUserId': friendUserId},
     );
     final data = ApiClient.unwrap(resp);
@@ -584,7 +584,7 @@ class ImApi {
     required String displayName,
   }) async {
     await ApiClient.dio.put(
-      '/admin-api/im/friend/update',
+      '/app-api/im/friend/update',
       data: {'friendUserId': friendUserId, 'displayName': displayName},
     );
   }
@@ -592,7 +592,7 @@ class ImApi {
   /// 拉黑好友（必须先是好友；单边屏蔽对方私聊消息）。
   static Future<void> blockFriend({required int friendUserId}) async {
     await ApiClient.dio.put(
-      '/admin-api/im/friend/block',
+      '/app-api/im/friend/block',
       queryParameters: {'friendUserId': friendUserId},
     );
   }
@@ -600,7 +600,7 @@ class ImApi {
   /// 移出黑名单。
   static Future<void> unblockFriend({required int friendUserId}) async {
     await ApiClient.dio.put(
-      '/admin-api/im/friend/unblock',
+      '/app-api/im/friend/unblock',
       queryParameters: {'friendUserId': friendUserId},
     );
   }
@@ -611,7 +611,7 @@ class ImApi {
     bool clear = true,
   }) async {
     await ApiClient.dio.delete(
-      '/admin-api/im/friend/delete',
+      '/app-api/im/friend/delete',
       queryParameters: {'friendUserId': friendUserId, 'clear': clear},
     );
   }
@@ -624,7 +624,7 @@ class ImApi {
     int addSource = 1,
   }) async {
     await ApiClient.dio.post(
-      '/admin-api/im/friend-request/apply',
+      '/app-api/im/friend-request/apply',
       data: {
         'toUserId': toUserId,
         'applyContent': applyContent,
@@ -642,7 +642,7 @@ class ImApi {
     required int limit,
   }) async {
     final resp = await ApiClient.dio.get(
-      '/admin-api/im/friend-request/list',
+      '/app-api/im/friend-request/list',
       queryParameters: {
         'maxId': ?maxId,
         'limit': limit,
@@ -658,7 +658,7 @@ class ImApi {
   /// 同意好友申请。
   static Future<void> agreeFriendRequest({required int id}) async {
     await ApiClient.dio.put(
-      '/admin-api/im/friend-request/agree',
+      '/app-api/im/friend-request/agree',
       queryParameters: {'id': id},
     );
   }
@@ -669,7 +669,7 @@ class ImApi {
     String handleContent = '',
   }) async {
     await ApiClient.dio.put(
-      '/admin-api/im/friend-request/refuse',
+      '/app-api/im/friend-request/refuse',
       queryParameters: {
         'id': id,
         if (handleContent.isNotEmpty) 'handleContent': handleContent,
@@ -680,7 +680,7 @@ class ImApi {
   /// 我管理的群的所有待处理进群申请（申请中心加群 tab）。
   static Future<List<ImGroupRequest>> getUnhandledGroupRequestList() async {
     final resp = await ApiClient.dio
-        .get('/admin-api/im/group-request/unhandled-list');
+        .get('/app-api/im/group-request/unhandled-list');
     final data = ApiClient.unwrap(resp);
     if (data is! List) return const [];
     return data
@@ -695,7 +695,7 @@ class ImApi {
     bool joinApproval = false,
   }) async {
     final resp = await ApiClient.dio.post(
-      '/admin-api/im/group/create',
+      '/app-api/im/group/create',
       data: {
         'name': name,
         'memberUserIds': memberUserIds,

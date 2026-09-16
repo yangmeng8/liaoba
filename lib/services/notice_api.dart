@@ -14,7 +14,7 @@ class NoticeApi {
     int? status,
   }) async {
     final resp = await ApiClient.dio.get(
-      '/admin-api/system/notice/page',
+      '/app-api/system/notice/page',
       queryParameters: {
         'pageNo': pageNo,
         'pageSize': pageSize,
@@ -38,7 +38,7 @@ class NoticeApi {
   /// 公告详情。
   static Future<Notice> getNotice({required int id}) async {
     final resp = await ApiClient.dio.get(
-      '/admin-api/system/notice/get',
+      '/app-api/system/notice/get',
       queryParameters: {'id': id},
     );
     return Notice.fromJson(Map<String, dynamic>.from(ApiClient.unwrap(resp)));
@@ -47,7 +47,7 @@ class NoticeApi {
   /// 新增公告。
   static Future<void> createNotice({required Notice notice}) async {
     await ApiClient.dio.post(
-      '/admin-api/system/notice/create',
+      '/app-api/system/notice/create',
       data: notice.toCreateJson(),
     );
   }
@@ -55,7 +55,7 @@ class NoticeApi {
   /// 更新公告。
   static Future<void> updateNotice({required Notice notice}) async {
     await ApiClient.dio.put(
-      '/admin-api/system/notice/update',
+      '/app-api/system/notice/update',
       data: notice.toUpdateJson(),
     );
   }
@@ -63,7 +63,7 @@ class NoticeApi {
   /// 删除公告。
   static Future<void> deleteNotice({required int id}) async {
     await ApiClient.dio.delete(
-      '/admin-api/system/notice/delete',
+      '/app-api/system/notice/delete',
       queryParameters: {'id': id},
     );
   }

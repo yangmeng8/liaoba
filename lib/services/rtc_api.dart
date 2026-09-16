@@ -13,7 +13,7 @@ class RtcApi {
     required List<int> inviteeIds,
   }) async {
     final resp = await ApiClient.dio.post(
-      '/admin-api/im/rtc/create',
+      '/app-api/im/rtc/create',
       data: {
         'conversationType': conversationType,
         'mediaType': mediaType,
@@ -30,7 +30,7 @@ class RtcApi {
     required List<int> inviteeIds,
   }) async {
     await ApiClient.dio.post(
-      '/admin-api/im/rtc/invite',
+      '/app-api/im/rtc/invite',
       data: {'room': room, 'inviteeIds': inviteeIds},
     );
   }
@@ -38,7 +38,7 @@ class RtcApi {
   /// 加入已有群通话（胶囊条「加入」按钮）。
   static Future<RtcCallData> joinCall({required String room}) async {
     final resp = await ApiClient.dio.post(
-      '/admin-api/im/rtc/join',
+      '/app-api/im/rtc/join',
       queryParameters: {'room': room},
     );
     return RtcCallData.fromJson(ApiClient.unwrap(resp));
@@ -47,7 +47,7 @@ class RtcApi {
   /// 接听通话（返回带本人 token 的连接数据）。
   static Future<RtcCallData> acceptCall({required String room}) async {
     final resp = await ApiClient.dio.post(
-      '/admin-api/im/rtc/accept',
+      '/app-api/im/rtc/accept',
       queryParameters: {'room': room},
     );
     return RtcCallData.fromJson(ApiClient.unwrap(resp));
@@ -56,7 +56,7 @@ class RtcApi {
   /// 拒绝通话（被叫接通前）。
   static Future<void> rejectCall({required String room}) async {
     await ApiClient.dio.post(
-      '/admin-api/im/rtc/reject',
+      '/app-api/im/rtc/reject',
       queryParameters: {'room': room},
     );
   }
@@ -64,7 +64,7 @@ class RtcApi {
   /// 取消邀请（主叫接通前）。
   static Future<void> cancelCall({required String room}) async {
     await ApiClient.dio.post(
-      '/admin-api/im/rtc/cancel',
+      '/app-api/im/rtc/cancel',
       queryParameters: {'room': room},
     );
   }
@@ -72,7 +72,7 @@ class RtcApi {
   /// 离开通话（接通后）。
   static Future<void> leaveCall({required String room}) async {
     await ApiClient.dio.post(
-      '/admin-api/im/rtc/leave',
+      '/app-api/im/rtc/leave',
       queryParameters: {'room': room},
     );
   }
@@ -80,7 +80,7 @@ class RtcApi {
   /// 振铃超时检查（INVITING 端 60s 轮询触发服务端扫描，接口静默）。
   static Future<void> noAnswerCallCheck({required String room}) async {
     await ApiClient.dio.post(
-      '/admin-api/im/rtc/no-answer-call-check',
+      '/app-api/im/rtc/no-answer-call-check',
       queryParameters: {'room': room},
     );
   }
@@ -88,7 +88,7 @@ class RtcApi {
   /// 查询群当前进行中的通话（群聊顶部「N 人正在通话」胶囊条用）。
   static Future<RtcGroupCallData?> getActiveCall({required int groupId}) async {
     final resp = await ApiClient.dio.get(
-      '/admin-api/im/rtc/get-active-call',
+      '/app-api/im/rtc/get-active-call',
       queryParameters: {'groupId': groupId},
     );
     final data = ApiClient.unwrap(resp);

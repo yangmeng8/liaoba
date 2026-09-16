@@ -22,7 +22,7 @@ class AuthApi {
     int scene = SmsScene.memberLogin,
   }) async {
     final resp = await ApiClient.dio.post(
-      '/admin-api/member/auth/send-sms-code',
+      '/app-api/member/auth/send-sms-code',
       data: {'mobile': mobile, 'scene': scene},
     );
     final data = ApiClient.unwrap(resp);
@@ -40,7 +40,7 @@ class AuthApi {
     String region = '',
   }) async {
     final resp = await ApiClient.dio.post(
-      '/admin-api/member/auth/sms-register',
+      '/app-api/member/auth/sms-register',
       data: {
         'mobile': mobile,
         'code': code,
@@ -68,7 +68,7 @@ class AuthApi {
     required String code,
   }) async {
     final resp = await ApiClient.dio.post(
-      '/admin-api/member/auth/sms-login',
+      '/app-api/member/auth/sms-login',
       data: {'mobile': mobile, 'code': code},
     );
     await _saveLoginResp(resp);
@@ -80,8 +80,9 @@ class AuthApi {
     required String password,
   }) async {
     final resp = await ApiClient.dio.post(
-      '/admin-api/system/auth/login',
-      data: {'username': mobile, 'password': password},
+      '/app-api/member/auth/login',
+      // member 体系登录参数为 mobile（原 system 体系用 username）
+      data: {'mobile': mobile, 'password': password},
     );
     await _saveLoginResp(resp);
   }
@@ -93,7 +94,7 @@ class AuthApi {
     required String password,
   }) async {
     final resp = await ApiClient.dio.put(
-      '/admin-api/member/user/reset-password',
+      '/app-api/member/user/reset-password',
       data: {'mobile': mobile, 'code': code, 'password': password},
     );
     final data = ApiClient.unwrap(resp);
@@ -103,7 +104,7 @@ class AuthApi {
   /// 退出登录。服务端使当前 token 失效，成功返回 true。
   static Future<bool> logout() async {
     final resp = await ApiClient.dio.post(
-      '/admin-api/member/auth/logout',
+      '/app-api/member/auth/logout',
     );
     final data = ApiClient.unwrap(resp);
     return data == true;
@@ -126,7 +127,7 @@ class AuthApi {
   /// 拉取登录用户资料（昵称/头像/权限码）并缓存（对应 H5 登录后调用的权限信息接口）。
   static Future<void> loadUserProfile() async {
     final resp = await ApiClient.dio
-        .get('/admin-api/system/auth/get-permission-info');
+        .get('/app-api/system/auth/get-permission-info');
     final data = ApiClient.unwrap(resp);
     final user = data is Map ? data['user'] : null;
     if (user is Map) {
@@ -146,7 +147,7 @@ class AuthApi {
   /// 获得用户精简资料（昵称/头像/性别/部门；点头像弹资料页场景，免鉴权）。
   static Future<SimpleUser?> getSimpleUser(int id) async {
     final resp = await ApiClient.dio.get(
-      '/admin-api/system/user/get-simple',
+      '/app-api/system/user/get-simple',
       queryParameters: {'id': id},
     );
     final data = ApiClient.unwrap(resp);
@@ -158,7 +159,7 @@ class AuthApi {
   /// 客户端本地搜索 + 隐藏自己 + 已好友置灰）。
   static Future<List<SimpleUser>> getSimpleUserList() async {
     final resp = await ApiClient.dio
-        .get('/admin-api/system/user/simple-list');
+        .get('/app-api/system/user/simple-list');
     final data = ApiClient.unwrap(resp);
     if (data is! List) return const [];
     return data
