@@ -124,7 +124,7 @@ class AuthApi {
     }
   }
 
-  /// 拉取登录用户资料（昵称/头像）并缓存。
+  /// 拉取登录用户资料（昵称/头像/手机号）并缓存。
   /// app 端走 member 体系用户中心接口（app-api/system/auth/get-permission-info 不存在）。
   static Future<void> loadUserProfile() async {
     final resp = await ApiClient.dio
@@ -134,31 +134,21 @@ class AuthApi {
       await AuthManager.instance.updateProfile(
         nickname: (data['nickname'] ?? '').toString(),
         avatar: (data['avatar'] ?? '').toString(),
+        mobile: (data['mobile'] ?? '').toString(),
       );
     }
   }
 
-  /// 获得用户精简资料（昵称/头像/性别/部门；点头像弹资料页场景，免鉴权）。
-  static Future<SimpleUser?> getSimpleUser(int id) async {
-    final resp = await ApiClient.dio.get(
-      '/app-api/system/user/get-simple',
-      queryParameters: {'id': id},
+  /// 通过手机号搜索用户（app-api/system/user 系列接口不存在；
+  /// 命中返回精简资料，未找到/未启用返回 null）。
+  static Future<SimpleUser?> findUserByMobile(String mobile) async {
+    final resp = await ApiClient.dio.put(
+      '/app-api/member/user/findUserByMobile',
+      queryParameters: {'mobile': mobile},
     );
     final data = ApiClient.unwrap(resp);
     if (data is! Map<String, dynamic>) return null;
     return SimpleUser.fromJson(data);
-  }
-
-  /// 全量精简用户列表（添加好友的用户选择器用；
-  /// 客户端本地搜索 + 隐藏自己 + 已好友置灰）。
-  static Future<List<SimpleUser>> getSimpleUserList() async {
-    final resp = await ApiClient.dio
-        .get('/app-api/system/user/simple-list');
-    final data = ApiClient.unwrap(resp);
-    if (data is! List) return const [];
-    return data
-        .map((e) => SimpleUser.fromJson(Map<String, dynamic>.from(e)))
-        .toList();
   }
 }
 

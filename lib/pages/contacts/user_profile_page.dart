@@ -59,38 +59,40 @@ class _UserProfilePageState extends State<UserProfilePage> {
       ..showSnackBar(SnackBar(content: Text(msg)));
   }
 
-  /// 数据加载（对齐 H5 loadUserInfo）：
-  /// ① 用户基础资料（失败可重试）；② 好友表判关系（失败降级 stranger）；
-  /// ③ 好友 → 拉单个好友详情（备注/来源/拉黑/添加时间）。
+  /// 数据加载（app 端无 system/user/get-simple，改用好友详情做资料源）：
+  /// ① 好友详情（含昵称/头像；网络异常整页可重试）；② 关系判定（自己/好友/陌生人）；
+  /// ③ 陌生人无可用资料接口 → 字母色卡 + 「用户N」兜底。
   Future<void> _loadUserInfo() async {
     setState(() {
       _loading = true;
       _error = null;
     });
+    final isSelf = widget.userId == (AuthManager.instance.userId ?? 0);
     try {
-      final user = await AuthApi.getSimpleUser(widget.userId);
-      if (user == null) {
-        setState(() {
-          _loading = false;
-          _error = '用户不存在或已注销';
-        });
-        return;
-      }
-      // 关系判定：自己 → 好友（非拉黑）→ 陌生人
-      _Relation relation;
       ImFriend? friend;
-      if (widget.userId == (AuthManager.instance.userId ?? 0)) {
-        relation = _Relation.self;
-      } else {
-        try {
-          friend = await ImApi.getFriendDetail(friendUserId: widget.userId);
-        } catch (_) {
-          // 好友表请求失败不阻塞：降级为陌生人
-        }
-        relation = (friend != null && !friend.blocked)
-            ? _Relation.friend
-            : _Relation.stranger;
+      if (!isSelf) {
+        friend = await ImApi.getFriendDetail(friendUserId: widget.userId);
       }
+      // 资料构造：自己取登录缓存；好友/拉黑好友取好友详情；陌生人留空兜底
+      SimpleUser? user;
+      if (isSelf) {
+        user = SimpleUser(
+          id: widget.userId,
+          nickname: AuthManager.instance.nickname ?? '',
+          avatar: AuthManager.instance.avatar ?? '',
+        );
+      } else if (friend != null) {
+        user = SimpleUser(
+          id: widget.userId,
+          nickname: friend.nickname,
+          avatar: friend.avatar,
+        );
+      }
+      final relation = isSelf
+          ? _Relation.self
+          : (friend != null && !friend.blocked)
+              ? _Relation.friend
+              : _Relation.stranger;
       if (!mounted) return;
       setState(() {
         _user = user;

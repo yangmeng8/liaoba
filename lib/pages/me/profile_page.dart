@@ -2,7 +2,10 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import '../../services/auth_api.dart';
+import '../../services/auth_manager.dart';
 import '../../shared/app_theme.dart';
+import '../../shared/im_avatar.dart';
 import 'my_qrcode_page.dart';
 import 'nickname_edit_page.dart';
 import 'signature_edit_page.dart';
@@ -16,16 +19,32 @@ class ProfilePage extends StatefulWidget {
 }
 
 class _ProfilePageState extends State<ProfilePage> {
-  /// 用户选择的头像文件；null 时显示默认占位。
+  /// 用户选择的头像文件；null 时显示网络头像/默认占位。
   XFile? _avatarFile;
 
-  /// 当前昵称（可从编辑页回写）。
-  String _nickname = '李猛';
+  /// 当前昵称（AuthManager 缓存，可从编辑页回写）。
+  String _nickname = '';
 
   /// 当前个性签名。
   String _signature = '';
 
   final _picker = ImagePicker();
+
+  @override
+  void initState() {
+    super.initState();
+    final profile = AuthManager.instance;
+    _nickname = (profile.nickname ?? '').trim();
+    _signature = '';
+    // 进页刷新用户资料（昵称/头像/手机号）；缓存兜底，失败静默
+    AuthApi.loadUserProfile().then((_) {
+      if (!mounted) return;
+      final n = (AuthManager.instance.nickname ?? '').trim();
+      setState(() {
+        if (n.isNotEmpty) _nickname = n;
+      });
+    }).catchError((_) {});
+  }
 
   void _toast(String msg) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
@@ -109,7 +128,7 @@ class _ProfilePageState extends State<ProfilePage> {
     }
   }
 
-  /// 点击昵称行 → 跳转编辑页，保存后回写。
+  /// 点击昵称行 → 跳转编辑页，保存后回写（本地缓存 + 页面）。
   Future<void> _onNicknameTap() async {
     final result = await Navigator.of(context).push<String>(
       MaterialPageRoute(
@@ -118,6 +137,11 @@ class _ProfilePageState extends State<ProfilePage> {
     );
     if (result != null && mounted) {
       setState(() => _nickname = result);
+      // 回写 AuthManager（内存 + 磁盘），保证「我的」页等处展示一致
+      await AuthManager.instance.updateProfile(
+        nickname: result,
+        avatar: AuthManager.instance.avatar ?? '',
+      );
     }
   }
 
@@ -125,9 +149,9 @@ class _ProfilePageState extends State<ProfilePage> {
   Widget build(BuildContext context) {
     final colors = context.colors;
 
-    // 模拟当前用户资料（实际应从状态层读取）
-    const liaoBaId = '97160mek';
-    const phone = '18589854829';
+    // 登录用户资料：手机号/用户编号（接口有则显示，无则占位）
+    final phone = (AuthManager.instance.mobile ?? '').trim();
+    final liaoBaId = AuthManager.instance.userId?.toString() ?? '-';
 
     return Scaffold(
       backgroundColor: colors.bg,
@@ -219,7 +243,7 @@ class _ProfilePageState extends State<ProfilePage> {
                         title: '手机号码',
                         colors: colors,
                         showDivider: true,
-                        trailing: Text(phone,
+                        trailing: Text(phone.isEmpty ? '-' : phone,
                             style: TextStyle(
                                 fontSize: 16, color: colors.muted)),
                       ),
@@ -280,21 +304,31 @@ class _ProfilePageState extends State<ProfilePage> {
     );
   }
 
-  /// 头像：有选择的图片用 FileImage，否则显示默认占位。
+  /// 头像：本地选图 > 网络头像（AuthManager）> 默认占位。
   Widget _buildAvatar() {
-    const placeholder = _AvatarPlaceholder();
-    if (_avatarFile == null) return placeholder;
-    return Container(
-      width: 46,
-      height: 46,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        image: DecorationImage(
-          image: FileImage(File(_avatarFile!.path)),
-          fit: BoxFit.cover,
+    if (_avatarFile != null) {
+      return Container(
+        width: 46,
+        height: 46,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          image: DecorationImage(
+            image: FileImage(File(_avatarFile!.path)),
+            fit: BoxFit.cover,
+          ),
         ),
-      ),
-    );
+      );
+    }
+    final avatar = AuthManager.instance.avatar ?? '';
+    if (avatar.isNotEmpty) {
+      return ImAvatar(
+        src: avatar,
+        name: _nickname,
+        size: 46,
+        borderRadius: const BorderRadius.all(Radius.circular(23)),
+      );
+    }
+    return const _AvatarPlaceholder();
   }
 }
 

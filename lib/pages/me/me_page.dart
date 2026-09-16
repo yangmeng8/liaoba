@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
+import '../../services/auth_api.dart';
+import '../../services/auth_manager.dart';
 import '../../shared/app_theme.dart';
+import '../../shared/im_avatar.dart';
 import 'chat_settings_page.dart';
 import 'favorites_page.dart';
 import 'my_qrcode_page.dart';
@@ -8,8 +11,22 @@ import 'profile_page.dart';
 import 'general/general_settings_page.dart';
 import 'general/appearanceSettings/appearance_settings_page.dart';
 
-class MePage extends StatelessWidget {
+class MePage extends StatefulWidget {
   const MePage({super.key});
+
+  @override
+  State<MePage> createState() => _MePageState();
+}
+
+class _MePageState extends State<MePage> {
+  @override
+  void initState() {
+    super.initState();
+    // 进页刷新用户资料（昵称/头像）；缓存兜底，失败静默
+    AuthApi.loadUserProfile().then((_) {
+      if (mounted) setState(() {});
+    }).catchError((_) {});
+  }
 
   static VoidCallback? _onItemTap(String title, BuildContext context) {
     switch (title) {
@@ -53,6 +70,12 @@ class MePage extends StatelessWidget {
       (Icons.palette_outlined, '外观设置'),
       (Icons.smart_toy_outlined, '通用'),
     ];
+    // 登录用户资料（磁盘缓存 + 进页刷新）；接口无昵称时兜底「我」
+    final nickname =
+        (AuthManager.instance.nickname ?? '').trim().isNotEmpty
+            ? AuthManager.instance.nickname!.trim()
+            : '我';
+    final avatar = AuthManager.instance.avatar ?? '';
     return Column(
       children: [
         Container(
@@ -70,23 +93,17 @@ class MePage extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(28, 22, 18, 0),
               child: Row(
                 children: [
-                  Container(
-                    width: 74,
-                    height: 74,
-                    decoration: const BoxDecoration(
-                      color: Color(0xFFBDE7FF),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.person,
-                      size: 50,
-                      color: Color(0xFF304B73),
-                    ),
+                  // 用户头像（网络头像 / 字母色卡兜底，圆形）
+                  ImAvatar(
+                    src: avatar,
+                    name: nickname,
+                    size: 74,
+                    borderRadius: const BorderRadius.all(Radius.circular(37)),
                   ),
                   const SizedBox(width: 18),
-                  const Text(
-                    '李猛',
-                    style: TextStyle(
+                  Text(
+                    nickname,
+                    style: const TextStyle(
                       color: Colors.white,
                       fontSize: 21,
                       fontWeight: FontWeight.w700,

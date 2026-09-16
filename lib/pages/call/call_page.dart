@@ -6,6 +6,7 @@ import '../../rtc/livekit_room.dart';
 import '../../rtc/rtc_controller.dart';
 import '../../services/auth_api.dart';
 import '../../services/auth_manager.dart';
+import '../../services/im_api.dart';
 import '../../shared/im_avatar.dart';
 
 /// 通话页（等价 H5 rtc-call-container.vue）：
@@ -129,7 +130,8 @@ class _RtcCallPageState extends State<RtcCallPage> {
     return _userCache[p.userId]?.avatar ?? '';
   }
 
-  /// 解析对端/参与者资料（get-simple 免鉴权；缓存判重幂等）。
+  /// 解析对端/参与者资料（app 端无 get-simple，改用好友详情取昵称/头像；
+  /// 非好友返回空资料 → 「用户N」+ 字母色卡兜底；缓存判重幂等）。
   Future<void> _resolveProfiles() async {
     if (_resolving) return;
     _resolving = true;
@@ -143,8 +145,12 @@ class _RtcCallPageState extends State<RtcCallPage> {
       for (final id in ids) {
         if (_userCache.containsKey(id)) continue;
         try {
-          final u = await AuthApi.getSimpleUser(id);
-          if (u != null) _userCache[id] = u;
+          final f = await ImApi.getFriendDetail(friendUserId: id);
+          _userCache[id] = SimpleUser(
+            id: id,
+            nickname: f?.nickname ?? '',
+            avatar: f?.avatar ?? '',
+          );
         } catch (_) {
           // 静默：降级 '用户N'
         }

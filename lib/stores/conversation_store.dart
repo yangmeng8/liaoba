@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/im_conversation.dart';
 import '../models/im_message.dart';
+import '../models/im_ws_frame.dart';
 import '../services/auth_manager.dart';
 import '../services/im_api.dart';
 import '../services/im_websocket.dart';
@@ -14,15 +15,16 @@ import '../services/im_websocket.dart';
 /// 在客户端由消息流聚合出会话列表（最后一条摘要、未读数、排序）。
 ///
 /// 实时更新：监听 WebSocket 通知（新消息/已读等）与断线补偿事件，
-/// debounce 后全量补拉重建（推送保实时、拉取保最终一致）。
+/// debounce 后增量补拉重建（推送保实时、拉取保最终一致）。
 ///
-/// 第一期说明：暂无本地数据库，每次 load 全量拉取（minId=0）后在内存聚合；
-/// 后续引入 sqflite 后改为增量拉取 + 本地缓存。
+/// 增量策略：消息在内存累积（游标 = 各流末尾 id），推送补拉只拉新增，
+/// 避免每次全量重拉历史；撤回（2101）/删好友（1205）改变历史数据，
+/// 对应流清空后全量重拉。后续引入 sqflite 后可替换为本地库增量。
 class ConversationStore with ChangeNotifier {
   ConversationStore._() {
-    // WebSocket 推送 → 防抖全量补拉（对应 H5 im:message / im:event → 重建会话）
-    ImWebSocket.instance.notificationStream.listen((_) => _scheduleReload());
-    // 断线重连成功 → 立即全量补拉（断线补偿）
+    // WebSocket 推送 → 防抖增量补拉（对应 H5 im:message / im:event → 重建会话）
+    ImWebSocket.instance.notificationStream.listen(_onNotification);
+    // 断线重连成功 → 立即增量补拉（断线补偿，游标可拉到断线期间消息）
     ImWebSocket.instance.resyncStream.listen((_) => _scheduleReload());
   }
 
@@ -36,6 +38,15 @@ class ConversationStore with ChangeNotifier {
 
   /// 推送触发的补拉防抖间隔。
   static const Duration _reloadDebounce = Duration(milliseconds: 800);
+
+  /// 消息内存累积缓存（游标增量的基础：推送补拉只拉 id 大于
+  /// 缓存末尾的新消息，避免每次全量重拉历史导致刷新缓慢）。
+  final List<ImPrivateMessage> _privateMsgs = [];
+  final List<ImGroupMessage> _groupMsgs = [];
+  final List<ImChannelMessage> _channelMsgs = [];
+
+  /// 消息缓存归属用户（切换账号时清空，防止上个账号的消息串入）。
+  int? _ownerUserId;
 
   /// 聚合出的会话列表（已排序）。
   List<ImConversation> conversations = [];
@@ -63,7 +74,29 @@ class ConversationStore with ChangeNotifier {
   bool _loadedOnce = false;
   Timer? _reloadTimer;
 
-  /// 推送触发的防抖补拉：窗口内多次通知合并为一次全量拉取。
+  /// 推送到达：按类型失效增量缓存后防抖补拉。
+  /// 撤回（2101）改的是历史消息状态、删好友（1205）服务端会删私聊消息，
+  /// 增量游标拉不到 → 清空对应流做全量；其余（新消息/好友添加等）增量即可。
+  void _onNotification(ImWsNotification n) {
+    if (n.contentType == ImSystemMessageType.recall) {
+      switch (n.conversationType) {
+        case 1:
+          _privateMsgs.clear();
+          break;
+        case 2:
+          _groupMsgs.clear();
+          break;
+        case 3:
+          _channelMsgs.clear();
+          break;
+      }
+    } else if (n.contentType == ImSystemMessageType.friendDelete) {
+      _privateMsgs.clear();
+    }
+    _scheduleReload();
+  }
+
+  /// 推送触发的防抖补拉：窗口内多次通知合并为一次增量拉取。
   void _scheduleReload() {
     if (!_loadedOnce) return; // 首次加载由页面触发，避免重复
     _reloadTimer?.cancel();
@@ -89,28 +122,27 @@ class ConversationStore with ChangeNotifier {
   Future<void> _doLoad() async {
     final myUserId = AuthManager.instance.userId;
 
+    // 账号切换：清空消息缓存（防上个账号的消息串入重建结果）
+    if (_ownerUserId != myUserId) {
+      _privateMsgs.clear();
+      _groupMsgs.clear();
+      _channelMsgs.clear();
+      _ownerUserId = myUserId;
+    }
+
     // 本地置顶标记（首次惰性加载）
     await _ensureLocalPinnedLoaded();
 
-    // ① 元数据 + 读位置（并行）
-    final friendListFuture = ImApi.getFriendList();
-    final groupListFuture = ImApi.getGroupList();
-    final channelListFuture = ImApi.getChannelSimpleList();
-    final readsFuture = _pullAllReads();
-
-    // ② 消息增量全量拉取（并行）
-    final privateMsgsFuture = _pullAllPrivate();
-    final groupMsgsFuture = _pullAllGroup();
-    final channelMsgsFuture = _pullAllChannel();
-
+    // ① 元数据 + 读位置 + 消息增量（并行；元数据/读位置小数据全量，
+    // 消息走游标增量——缓存非空时只拉新增，推送补拉秒级完成）
     final results = await Future.wait([
-      friendListFuture,
-      groupListFuture,
-      channelListFuture,
-      readsFuture,
-      privateMsgsFuture,
-      groupMsgsFuture,
-      channelMsgsFuture,
+      ImApi.getFriendList(),
+      ImApi.getGroupList(),
+      ImApi.getChannelSimpleList(),
+      _pullAllReads(),
+      _pullAllPrivate(),
+      _pullAllGroup(),
+      _pullAllChannel(),
     ]);
     final friendList = results[0] as List<ImFriend>;
     final groupList = results[1] as List<ImGroup>;
@@ -120,7 +152,10 @@ class ConversationStore with ChangeNotifier {
     final groupMsgs = results[5] as List<ImGroupMessage>;
     final channelMsgs = results[6] as List<ImChannelMessage>;
 
-    // ③ 落内存
+    // ② 落内存：消息追加进累积缓存，元数据/读位置整体重建
+    _privateMsgs.addAll(privateMsgs);
+    _groupMsgs.addAll(groupMsgs);
+    _channelMsgs.addAll(channelMsgs);
     friends
       ..clear()
       ..addEntries(friendList.map((f) => MapEntry(f.friendUserId, f)));
@@ -135,8 +170,8 @@ class ConversationStore with ChangeNotifier {
       ..addEntries(reads.map(
           (r) => MapEntry('${r.conversationType.value}_${r.targetId}', r.messageId)));
 
-    // ④ 客户端聚合重建会话列表
-    conversations = _rebuild(privateMsgs, groupMsgs, channelMsgs, myUserId);
+    // ③ 客户端聚合重建会话列表（基于累积消息流）
+    conversations = _rebuild(_privateMsgs, _groupMsgs, _channelMsgs, myUserId);
     notifyListeners();
   }
 
@@ -202,10 +237,10 @@ class ConversationStore with ChangeNotifier {
     notifyListeners();
   }
 
-  /// 循环拉取全部私聊消息（minId 游标，升序）。
+  /// 循环拉取私聊消息（minId 游标，升序；缓存非空时仅拉新增）。
   Future<List<ImPrivateMessage>> _pullAllPrivate() async {
     final all = <ImPrivateMessage>[];
-    var minId = 0;
+    var minId = _privateMsgs.isNotEmpty ? _privateMsgs.last.id : 0;
     while (true) {
       final batch =
           await ImApi.pullPrivateMessages(minId: minId, size: _pullPageSize);
@@ -217,10 +252,10 @@ class ConversationStore with ChangeNotifier {
     return all;
   }
 
-  /// 循环拉取全部群聊消息（minId 游标，升序）。
+  /// 循环拉取群聊消息（minId 游标，升序；缓存非空时仅拉新增）。
   Future<List<ImGroupMessage>> _pullAllGroup() async {
     final all = <ImGroupMessage>[];
-    var minId = 0;
+    var minId = _groupMsgs.isNotEmpty ? _groupMsgs.last.id : 0;
     while (true) {
       final batch =
           await ImApi.pullGroupMessages(minId: minId, size: _pullPageSize);
@@ -232,10 +267,10 @@ class ConversationStore with ChangeNotifier {
     return all;
   }
 
-  /// 循环拉取全部频道消息（minId 游标，升序）。
+  /// 循环拉取频道消息（minId 游标，升序；缓存非空时仅拉新增）。
   Future<List<ImChannelMessage>> _pullAllChannel() async {
     final all = <ImChannelMessage>[];
-    var minId = 0;
+    var minId = _channelMsgs.isNotEmpty ? _channelMsgs.last.id : 0;
     while (true) {
       final batch =
           await ImApi.pullChannelMessages(minId: minId, size: _pullPageSize);
@@ -260,6 +295,18 @@ class ConversationStore with ChangeNotifier {
       lastId = batch.last.id;
     }
     return all;
+  }
+
+  /// 群广播事件人名解析（会话摘要用）：自己 > 好友备注/昵称 > 用户N。
+  String _resolveUserName(int userId) {
+    final me = AuthManager.instance.userId;
+    if (me != null && userId == me) {
+      final n = AuthManager.instance.nickname ?? '';
+      return n.isNotEmpty ? n : '用户$userId';
+    }
+    final friend = friends[userId];
+    if (friend != null && friend.shownName.isNotEmpty) return friend.shownName;
+    return '用户$userId';
   }
 
   /// 用消息流聚合会话列表：按「私聊对方 / 群」分组，计算最后一条消息与未读数。
@@ -337,7 +384,7 @@ class ConversationStore with ChangeNotifier {
         targetId: groupId,
         title: group?.shownName ?? '群$groupId',
         avatar: group?.avatar ?? '',
-        lastMessageText: last.textContent,
+        lastMessageText: last.textContent(nameResolver: _resolveUserName),
         lastMessageTime: last.sendTime,
         unreadCount: unread,
         pinned: _localPinned.contains('${ImConversationType.group.value}_$groupId'),

@@ -201,10 +201,17 @@ class _ChatSearchPageState extends State<ChatSearchPage> {
       );
     }
     final keyword = _keyword.toLowerCase();
+    // 群广播事件人名用成员缓存解析（昵称），无缓存时用户N 兜底
+    String resolveName(int userId) {
+      final n = _members[userId]?.nickname ?? '';
+      return n.isNotEmpty ? n : '用户$userId';
+    }
     final results = _all
         .where((m) =>
             !m.isRecalled &&
-            m.textContent.toLowerCase().contains(keyword))
+            m.textContent(nameResolver: resolveName)
+                .toLowerCase()
+                .contains(keyword))
         .toList()
         .reversed
         .toList(); // 最新的在前
@@ -232,7 +239,7 @@ class _ChatSearchPageState extends State<ChatSearchPage> {
             size: 40,
           ),
           title: Text(
-            m.textContent,
+            m.textContent(nameResolver: resolveName),
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(fontSize: 14, color: colors.text),

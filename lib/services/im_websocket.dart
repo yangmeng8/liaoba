@@ -27,7 +27,10 @@ class ImWebSocket {
   static final ImWebSocket instance = ImWebSocket._();
 
   // ===== 配置（对齐 H5 常量） =====
-  static const Duration _heartbeatInterval = Duration(seconds: 30);
+  /// 心跳间隔必须小于网关/服务端空闲超时（实测约 30s）：
+  /// 原先 30s 心跳与超时临界竞争，连接每个心跳周期必被断开，
+  /// 业务推送永远收不到（只能靠重连后 resync 补拉兜底）。
+  static const Duration _heartbeatInterval = Duration(seconds: 20);
   static const int _reconnectBaseMs = 1000;
   static const int _reconnectMaxMs = 30000;
   static const int _reconnectJitterMs = 3000;
@@ -148,20 +151,24 @@ class ImWebSocket {
     }
   }
 
-  /// 启动心跳：每 30s 发送文本 "ping"（发送失败由 onClose 兜底重连）。
+  /// 启动心跳：连接成功立即 ping 一次（尽早重置网关空闲超时计时），
+  /// 之后每 20s 一次（发送失败由 onClose 兜底重连）。
   void _startHeartbeat() {
     _heartbeatTimer?.cancel();
-    _heartbeatTimer = Timer.periodic(_heartbeatInterval, (_) {
-      final channel = _channel;
-      if (channel == null || _state != ImWsState.connected) return;
-      debugPrint('[WS] 心跳 ping');
-      try {
-        channel.sink.add('ping');
-      } catch (e) {
-        debugPrint('[WS] 心跳发送异常：$e');
-        // 发送异常：交给 onClose 触发重连
-      }
-    });
+    _sendPing();
+    _heartbeatTimer = Timer.periodic(_heartbeatInterval, (_) => _sendPing());
+  }
+
+  void _sendPing() {
+    final channel = _channel;
+    if (channel == null || _state != ImWsState.connected) return;
+    debugPrint('[WS] 心跳 ping');
+    try {
+      channel.sink.add('ping');
+    } catch (e) {
+      debugPrint('[WS] 心跳发送异常：$e');
+      // 发送异常：交给 onClose 触发重连
+    }
   }
 
   /// 连接关闭（服务端断开/网络异常）：非手动关闭则指数退避重连。

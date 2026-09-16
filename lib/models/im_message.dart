@@ -59,6 +59,9 @@ class ImPrivateMessage {
         ImConversationType.private.value,
       );
     }
+    if (type == ImSystemMessageType.friendAdd) {
+      return '你们已经是好友了，开始聊天吧';
+    }
     if (type == ImSystemMessageType.friendDelete) return '你已删除好友';
     if (type == ImSystemMessageType.recall) return '[消息已撤回]';
     return extractTextContent(content);
@@ -120,8 +123,10 @@ class ImGroupMessage {
 
   /// 消息文本：content 为 JSON 字符串（文本消息形如 {"content":"你好"}），
   /// 解析失败时回退为原始字符串；RTC 通话消息给通话摘要；
-  /// 群广播事件给结构化文案（会话列表无成员缓存，人名以「用户N」兜底）。
-  String get textContent {
+  /// 群广播事件给结构化文案。
+  /// [nameResolver]：广播事件中人名的解析（自己/好友表可给昵称；
+  /// 不传时以「用户N」兜底——聊天页搜索等无好友缓存的场景）。
+  String textContent({String Function(int userId)? nameResolver}) {
     if (isRecalled) return '[消息已撤回]';
     if (type == ImRtcMessageType.callStart || type == ImRtcMessageType.callEnd) {
       return resolveRtcCallLastContent(
@@ -135,7 +140,7 @@ class ImGroupMessage {
         resolveGroupNotificationSegments(
           type,
           parseGroupNotificationPayload(content),
-          (userId) => '用户$userId',
+          nameResolver ?? (userId) => '用户$userId',
         ),
       );
       return text.isNotEmpty ? text : '[群通知]';
