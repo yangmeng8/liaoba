@@ -31,29 +31,11 @@ class AuthManager {
   String? expiresTime;
   String? openid;
 
-  /// 登录用户昵称/头像（来自 /system/auth/get-permission-info，null=未加载）。
+  /// 登录用户昵称/头像（来自 /member/user/get，null=未加载）。
   String? nickname;
   String? avatar;
 
-  /// 登录用户权限码列表（来自 get-permission-info 的 permissions；
-  /// 超级管理员为 ["*:*:*"]，内存缓存，登出时清空）。
-  List<String> permissions = [];
-
   bool get isLoggedIn => accessToken != null && accessToken!.isNotEmpty;
-
-  /// 是否拥有指定权限码（对应 H5 hasAccessByCodes，传任一命中即 true）；
-  /// 支持超级管理员通配 "*:*:*" 与前缀通配 "system:*"。
-  bool hasAccess(String code) {
-    if (code.isEmpty) return false;
-    for (final p in permissions) {
-      if (p == code || p == '*:*:*') return true;
-      // 前缀段通配：system:notice:* 命中 system:notice:query
-      if (p.endsWith(':*') && code.startsWith(p.substring(0, p.length - 1))) {
-        return true;
-      }
-    }
-    return false;
-  }
 
   /// App 启动时调用，从磁盘恢复登录态。
   Future<void> load() async {
@@ -129,7 +111,6 @@ class AuthManager {
     openid = null;
     nickname = null;
     avatar = null;
-    permissions = [];
 
     final prefs = await SharedPreferences.getInstance();
     await prefs
