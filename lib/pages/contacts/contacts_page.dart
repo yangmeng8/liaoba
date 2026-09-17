@@ -10,6 +10,7 @@ import '../../shared/app_colors.dart';
 import '../../shared/app_theme.dart';
 import '../../shared/im_avatar.dart';
 import '../../shared/widgets.dart';
+import '../../stores/presence_store.dart';
 import 'create_group_page.dart';
 import 'friend_apply_page.dart';
 import 'friend_buckets.dart';
@@ -43,6 +44,7 @@ class _ContactsPageState extends State<ContactsPage> {
 
   /// WebSocket 订阅（好友增删/申请到达等推送 → 防抖刷新列表与角标）。
   StreamSubscription? _wsSub;
+  StreamSubscription? _presenceSub;
   Timer? _wsDebounce;
 
   String get _keyword => _searchCtrl.text;
@@ -57,11 +59,16 @@ class _ContactsPageState extends State<ContactsPage> {
       _wsDebounce?.cancel();
       _wsDebounce = Timer(const Duration(seconds: 1), _load);
     });
+    // 好友上线/下线 → 刷新好友头像在线角标
+    _presenceSub = PresenceStore.instance.changes.listen((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
   void dispose() {
     _wsSub?.cancel();
+    _presenceSub?.cancel();
     _wsDebounce?.cancel();
     _searchCtrl.dispose();
     _scrollCtrl.dispose();
@@ -487,7 +494,14 @@ class _FriendTile extends StatelessWidget {
         child: Row(
           children: [
             const SizedBox(width: 18),
-            ImAvatar(src: friend.avatar, name: friend.shownName, size: 44),
+            ImAvatar(
+              src: friend.avatar,
+              name: friend.shownName,
+              size: 44,
+              // 好友在线绿点 / 离线灰点
+              online: PresenceStore.instance.isOnline(friend.friendUserId),
+              borderRadius: BorderRadius.circular(8),
+            ),
             const SizedBox(width: 16),
             Expanded(
               child: Text(

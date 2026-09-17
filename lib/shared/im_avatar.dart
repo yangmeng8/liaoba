@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 /// IM 统一头像组件（对应 H5 im-avatar.vue）：
 /// - src 非空 → 图片裁剪填满（aspectFill）
 /// - src 为空 → 文字首字符 + 按名字 hash 的稳定底色（字母色卡兜底）
+/// - online 非 null → 右下角在线状态点（绿=在线 灰=离线）
 ///
 /// 同一名字在任何设备/任何时刻兜底颜色一致（名字不变则 hash 不变），
 /// 保证与 H5 端视觉统一（色板与算法原样对齐）。
@@ -18,19 +19,24 @@ class ImAvatar extends StatelessWidget {
   /// 圆角：聊天室内用圆角方形（8），其他场景可传圆形。
   final BorderRadius borderRadius;
 
+  /// 在线状态角标（null 不显示；true 绿点 false 灰点，右下角白描边）。
+  final bool? online;
+
   const ImAvatar({
     super.key,
     required this.src,
     required this.name,
     this.size = 40,
     this.borderRadius = const BorderRadius.all(Radius.circular(8)),
+    this.online,
   });
 
   @override
   Widget build(BuildContext context) {
     final radius = borderRadius;
+    Widget avatar;
     if (src.isNotEmpty) {
-      return ClipRRect(
+      avatar = ClipRRect(
         borderRadius: radius,
         child: Image.network(
           src,
@@ -42,8 +48,36 @@ class ImAvatar extends StatelessWidget {
           errorBuilder: (_, _, _) => _buildFallback(),
         ),
       );
+    } else {
+      avatar = _buildFallback();
     }
-    return _buildFallback();
+    if (online == null) return avatar;
+    final dot = size * 0.28;
+    return SizedBox(
+      width: size,
+      height: size,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned.fill(child: avatar),
+          Positioned(
+            right: 0,
+            bottom: 0,
+            child: Container(
+              width: dot,
+              height: dot,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: online!
+                    ? const Color(0xFF07C160)
+                    : const Color(0xFFB2B2B2),
+                border: Border.all(color: Colors.white, width: 2),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildFallback() {

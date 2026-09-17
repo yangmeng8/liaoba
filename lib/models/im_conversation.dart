@@ -30,6 +30,9 @@ class ImFriend {
   final String nickname;
   final String avatar;
 
+  /// 好友是否在线（friend/list 下发；WS FRIEND_ONLINE/OFFLINE 实时更新）。
+  final bool online;
+
   /// 备注拼音（后端预计算下发，字母分桶/搜索用；空格分隔音节）。
   final String displayNamePinyin;
 
@@ -52,6 +55,7 @@ class ImFriend {
     required this.status,
     required this.nickname,
     required this.avatar,
+    this.online = false,
     this.displayNamePinyin = '',
     this.nicknamePinyin = '',
     this.addSource = 0,
@@ -69,6 +73,7 @@ class ImFriend {
       status: asInt(json['status']),
       nickname: asString(json['nickname']),
       avatar: asString(json['avatar']),
+      online: asBool(json['online']),
       displayNamePinyin: asString(json['displayNamePinyin']),
       nicknamePinyin: asString(json['nicknamePinyin']),
       addSource: asInt(json['addSource']),

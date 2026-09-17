@@ -28,6 +28,36 @@ class ImWsFrame {
 
   /// 惰性解析内层通知 DTO；解析失败返回 null。
   ImWsNotification? get notification => ImWsNotification.tryParse(content);
+
+  /// 好友在线状态推送（type=FRIEND_ONLINE / FRIEND_OFFLINE）；其他类型返回 null。
+  ImWsPresence? get presence {
+    if (type == 'FRIEND_ONLINE') return ImWsPresence.tryParse(content, true);
+    if (type == 'FRIEND_OFFLINE') return ImWsPresence.tryParse(content, false);
+    return null;
+  }
+}
+
+/// 好友在线状态 DTO（content: {"online":bool,"userId":"id"}）。
+class ImWsPresence {
+  /// 好友用户编号。
+  final int userId;
+
+  /// 是否在线。
+  final bool online;
+
+  const ImWsPresence({required this.userId, required this.online});
+
+  static ImWsPresence? tryParse(String content, bool online) {
+    try {
+      final decoded = jsonDecode(content);
+      if (decoded is! Map) return null;
+      final id = int.tryParse('${decoded['userId']}') ?? 0;
+      if (id <= 0) return null;
+      return ImWsPresence(userId: id, online: online);
+    } catch (_) {
+      return null;
+    }
+  }
 }
 
 /// WebSocket 通知 DTO（对应 H5 ImNotificationWebSocketDTO）。

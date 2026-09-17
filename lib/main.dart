@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'pages/contacts/contacts_page.dart';
+import 'stores/presence_store.dart';
 import 'pages/logInAndSignUp/login_page.dart';
 import 'pages/me/me_page.dart';
 import 'pages/messages/messages_page.dart';
@@ -118,6 +119,8 @@ class _HomeShellState extends State<HomeShell> {
   @override
   void initState() {
     super.initState();
+    // 好友在线状态：订阅 WS FRIEND_ONLINE/FRIEND_OFFLINE 推送
+    PresenceStore.instance.attach();
     // 进入主框架（登录后）启动 IM 长连接，跨页面复用单条连接
     ImWebSocket.instance.ensure();
   }

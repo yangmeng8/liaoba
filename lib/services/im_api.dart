@@ -5,6 +5,7 @@ import '../models/im_conversation.dart';
 import '../models/im_face.dart';
 import '../models/im_message.dart';
 import '../shared/json_utils.dart';
+import '../stores/presence_store.dart';
 
 /// IM 聊天相关接口。
 class ImApi {
@@ -57,9 +58,12 @@ class ImApi {
     final resp = await ApiClient.dio.get('/app-api/im/friend/list');
     final data = ApiClient.unwrap(resp);
     if (data is! List) return const [];
-    return data
+    final friends = data
         .map((e) => ImFriend.fromJson(e as Map<String, dynamic>))
         .toList();
+    // 好友在线状态初始化（WS FRIEND_ONLINE/OFFLINE 增量维护）
+    PresenceStore.instance.initFromFriends(friends);
+    return friends;
   }
 
   /// 获得当前登录用户的群列表（含已退群的历史群，供展示群名/头像）。

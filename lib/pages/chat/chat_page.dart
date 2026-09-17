@@ -23,6 +23,7 @@ import '../../models/im_face.dart';
 import '../../models/im_message.dart';
 import '../../models/im_ws_frame.dart';
 import '../../rtc/rtc_controller.dart';
+import '../../stores/presence_store.dart';
 import '../../services/api_client.dart';
 import '../../services/auth_api.dart';
 import '../../services/auth_manager.dart';
@@ -156,6 +157,9 @@ class _ChatPageState extends State<ChatPage> {
   StreamSubscription? _wsSub;
   Timer? _wsRefreshTimer;
 
+  /// 好友在线状态订阅（私聊顶栏「在线/离线」实时刷新）。
+  StreamSubscription? _presenceSub;
+
   bool get _isPrivate => widget.type == ImConversationType.private;
   bool get _isGroup => widget.type == ImConversationType.group;
   bool get _isChannel => widget.type == ImConversationType.channel;
@@ -180,6 +184,12 @@ class _ChatPageState extends State<ChatPage> {
         _wsRefreshTimer = Timer(_wsRefreshDebounce, _refreshLatest);
       }
     });
+    // 私聊：好友在线状态变化 → 顶栏「在线/离线」实时刷新
+    if (_isPrivate) {
+      _presenceSub = PresenceStore.instance.changes.listen((_) {
+        if (mounted) setState(() {});
+      });
+    }
     // 群聊/频道：拉好友表建发送者头像/昵称索引（私聊直接用会话传入的头像）
     if (!_isPrivate) _loadFriends();
     // 群聊：拉群成员表（头像解析优先于好友表，对齐 H5 降级顺序）
@@ -341,6 +351,7 @@ class _ChatPageState extends State<ChatPage> {
   void dispose() {
     _wsSub?.cancel();
     _clearSub?.cancel();
+    _presenceSub?.cancel();
     _wsRefreshTimer?.cancel();
     _scrollCtrl.dispose();
     _inputCtrl.dispose();
@@ -1672,16 +1683,36 @@ class _ChatPageState extends State<ChatPage> {
                 onPressed: () => Navigator.of(context).pop(),
               ),
               Expanded(
-                child: Text(
-                  _titleOverride ?? widget.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 17,
-                    fontWeight: FontWeight.w600,
-                    color: colors.surfaceText,
-                  ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      _titleOverride ?? widget.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: _isPrivate ? 16 : 17,
+                        fontWeight: FontWeight.w600,
+                        color: colors.surfaceText,
+                      ),
+                    ),
+                    // 私聊：昵称下方显示好友在线状态（在线绿 / 离线灰）
+                    if (_isPrivate)
+                      Text(
+                        PresenceStore.instance.isOnline(widget.targetId)
+                            ? '在线'
+                            : '离线',
+                        style: TextStyle(
+                          fontSize: 10,
+                          height: 1.2,
+                          color: PresenceStore.instance
+                                  .isOnline(widget.targetId)
+                              ? const Color(0xFF07C160)
+                              : colors.muted,
+                        ),
+                      ),
+                  ],
                 ),
               ),
               // 通话入口：私聊/群聊可发起语音、视频通话（频道不支持）

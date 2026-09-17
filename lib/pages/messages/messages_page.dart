@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../models/im_conversation.dart';
@@ -8,6 +10,7 @@ import '../../shared/group_avatar.dart';
 import '../../shared/im_avatar.dart';
 import '../../shared/widgets.dart';
 import '../../stores/conversation_store.dart';
+import '../../stores/presence_store.dart';
 import '../chat/chat_page.dart';
 import '../contacts/create_group_page.dart';
 import '../contacts/friend_apply_page.dart';
@@ -30,10 +33,23 @@ class _MessagesPageState extends State<MessagesPage> {
   /// 搜索关键词（会话标题 + 最后一条消息内容）。
   String _keyword = '';
 
+  /// 好友在线状态订阅（头像角标实时刷新）。
+  StreamSubscription? _presenceSub;
+
   @override
   void initState() {
     super.initState();
     _load();
+    // 好友上线/下线 → 刷新私聊会话头像角标
+    _presenceSub = PresenceStore.instance.changes.listen((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _presenceSub?.cancel();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -286,6 +302,10 @@ class _Avatar extends StatelessWidget {
       name: conversation.title,
       size: 56,
       borderRadius: BorderRadius.circular(12),
+      // 私聊：好友在线绿点 / 离线灰点（频道不显示）
+      online: conversation.type == ImConversationType.private
+          ? PresenceStore.instance.isOnline(conversation.targetId)
+          : null,
     );
   }
 }

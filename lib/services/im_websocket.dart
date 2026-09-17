@@ -59,6 +59,9 @@ class ImWebSocket {
   final _notificationCtrl = StreamController<ImWsNotification>.broadcast();
   final _resyncCtrl = StreamController<void>.broadcast();
 
+  /// 好友在线状态流（FRIEND_ONLINE / FRIEND_OFFLINE）。
+  final _presenceCtrl = StreamController<ImWsPresence>.broadcast();
+
   /// 帧串行处理队列尾（保证到达顺序）。
   Future<void> _frameTail = Future.value();
 
@@ -74,6 +77,9 @@ class ImWebSocket {
 
   /// 断线补偿流：重连成功后触发一次，消费方应全量补拉数据。
   Stream<void> get resyncStream => _resyncCtrl.stream;
+
+  /// 好友在线状态流（上线/下线推送）。
+  Stream<ImWsPresence> get presenceStream => _presenceCtrl.stream;
 
   /// 构建 WS 地址：http(s) → ws(s)，token 走 URL query。
   /// 双 token 时用 refreshToken（存活期长，对齐 H5），否则 accessToken。
@@ -224,9 +230,21 @@ class ImWebSocket {
 
   /// 解析并分发单帧：心跳文本直接吞掉，业务帧解析后广播。
   void _handleFrame(String raw) {
+    // 原始帧调试日志（心跳应答 pong 除外，避免刷屏；超长截断）
+    if (raw != 'pong') {
+      debugPrint('[WS] 原始帧（${raw.length}字节）：'
+          '${raw.length > 500 ? '${raw.substring(0, 500)}...' : raw}');
+    }
     final frame = ImWsFrame.tryParse(raw);
     if (frame == null) {
       debugPrint('[WS] 收到非 JSON 帧（心跳应答等）：${raw.length > 50 ? '${raw.substring(0, 50)}...' : raw}');
+      return;
+    }
+    // 好友在线/下线推送（独立帧类型，content 无 notification 结构）
+    final presence = frame.presence;
+    if (presence != null) {
+      debugPrint('[WS] 好友${presence.online ? '上线' : '下线'}：${presence.userId}');
+      _presenceCtrl.add(presence);
       return;
     }
     final notification = frame.notification;
