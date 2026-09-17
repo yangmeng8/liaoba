@@ -4,8 +4,8 @@
 <dict>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
-	<key>CFBundleDevelopmentRegion</key>
-	<string>$(DEVELOPMENT_LANGUAGE)</string>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>zh_CN</string>
 	<key>CFBundleDisplayName</key>
 	<string>Liaoba</string>
 	<key>CFBundleExecutable</key>

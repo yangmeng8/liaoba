@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'pages/contacts/contacts_page.dart';
 import 'pages/logInAndSignUp/login_page.dart';
 import 'pages/me/me_page.dart';
@@ -52,12 +53,28 @@ class LiaobaApp extends StatelessWidget {
           themeMode: ThemeManager.instance.mode,
           // 401 全局跳转目标（AuthManager.handleUnauthorized 使用）
           routes: {'/login': (_) => const LoginPage()},
-          // 全局字体缩放：注入 textScaler
-          builder: (context, child) => MediaQuery(
-            data: MediaQuery.of(context).copyWith(
-              textScaler: TextScaler.linear(FontScaleManager.instance.scale),
+          // 全局字体缩放：注入 textScaler；
+          // 状态栏全透明（去掉 Android 默认 25% 半透明黑 scrim），
+          // 图标颜色跟随明暗主题（浅色主题深图标 / 深色主题亮图标）
+          builder: (context, child) => AnnotatedRegion<SystemUiOverlayStyle>(
+            value: SystemUiOverlayStyle(
+              statusBarColor: Colors.transparent,
+              statusBarIconBrightness:
+                  Theme.of(context).brightness == Brightness.dark
+                      ? Brightness.light
+                      : Brightness.dark,
+              statusBarBrightness:
+                  Theme.of(context).brightness == Brightness.dark
+                      ? Brightness.dark
+                      : Brightness.light,
             ),
-            child: child!,
+            child: MediaQuery(
+              data: MediaQuery.of(context).copyWith(
+                textScaler:
+                    TextScaler.linear(FontScaleManager.instance.scale),
+              ),
+              child: child!,
+            ),
           ),
           // 登录守卫：已登录进主框架（消息页），未登录进登录页
           home: AuthManager.instance.isLoggedIn

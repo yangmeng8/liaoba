@@ -1,13 +1,19 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 网络访问（debug/profile 清单自带；release 用本清单，缺了会一直"网络连接失败"） -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- 网络状态（socket 连接前探测） -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.CAMERA"/>
     <!-- 音视频通话：麦克风 + 音频路由控制（听筒/扬声器切换） -->
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
+    <!-- 后端图片/文件 URL 若为 http 明文，Android 9+ release 默认拒绝加载，放行保证测试环境可用 -->
     <application
         android:label="liaoba"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"
