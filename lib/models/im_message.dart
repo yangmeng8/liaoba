@@ -49,7 +49,8 @@ class ImPrivateMessage {
   bool get isRecalled => status == 2;
 
   /// 消息文本：content 为 JSON 字符串（文本消息形如 {"content":"你好"}），
-  /// 解析失败时回退为原始字符串；RTC 通话消息给通话摘要。
+  /// 解析失败时回退为原始字符串；RTC 通话消息给通话摘要；
+  /// 媒体消息给占位文案（[语音]/[图片] 等，避免列表露出 url）。
   String get textContent {
     if (isRecalled) return '[消息已撤回]';
     if (type == ImRtcMessageType.callStart || type == ImRtcMessageType.callEnd) {
@@ -64,6 +65,8 @@ class ImPrivateMessage {
     }
     if (type == ImSystemMessageType.friendDelete) return '你已删除好友';
     if (type == ImSystemMessageType.recall) return '[消息已撤回]';
+    final label = mediaSummaryLabel(type);
+    if (label != null) return label;
     return extractTextContent(content);
   }
 }
@@ -146,6 +149,8 @@ class ImGroupMessage {
       return text.isNotEmpty ? text : '[群通知]';
     }
     if (type == ImSystemMessageType.recall) return '[消息已撤回]';
+    final label = mediaSummaryLabel(type);
+    if (label != null) return label;
     return extractTextContent(content);
   }
 }
@@ -661,6 +666,22 @@ String resolveRtcCallLastContent(int messageType, String content, int conversati
   }
   return '';
 }
+
+/// 从消息 content（JSON 字符串）中提取文本内容。
+/// 媒体消息摘要占位（会话列表/搜索结果用，避免露出 url）；
+/// 非媒体类型返回 null（走 extractTextContent）。
+/// 值对齐 ChatMsgType（chat_message.dart）：102 图片 103 语音 104 视频
+/// 105 文件 115 表情 108 名片 125 频道素材。
+String? mediaSummaryLabel(int type) => switch (type) {
+  102 => '[图片]',
+  103 => '[语音]',
+  104 => '[视频]',
+  105 => '[文件]',
+  115 => '[表情]',
+  108 => '[名片]',
+  125 => '[频道]',
+  _ => null,
+};
 
 /// 从消息 content（JSON 字符串）中提取文本内容。
 String extractTextContent(String content) {
