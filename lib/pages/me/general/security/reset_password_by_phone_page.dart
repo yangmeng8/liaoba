@@ -2,6 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../../../services/api_client.dart';
+import '../../../../services/auth_api.dart';
+import '../../../../services/auth_manager.dart';
 import '../../../../shared/app_colors.dart';
 import '../../../../shared/app_theme.dart';
 import 'change_bound_phone_page.dart';
@@ -26,7 +29,32 @@ class _ResetPasswordByPhonePageState extends State<ResetPasswordByPhonePage> {
   Timer? _countdownTimer;
   int _countdown = 0;
 
-  static const _boundPhone = '185****4829';
+  /// 发送验证码/提交中标记（防重复点击）。
+  bool _sendingCode = false;
+  bool _submitting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // 缓存无手机号时静默刷新用户资料（member/user/get）
+    if ((AuthManager.instance.mobile ?? '').isEmpty) {
+      AuthApi.loadUserProfile().then((_) {
+        if (mounted) setState(() {});
+      }).catchError((Object _) {});
+    }
+  }
+
+  /// 完整手机号（重置密码接口入参用）。
+  String get _mobile => AuthManager.instance.mobile ?? '';
+
+  /// 打码手机号：185****4829（不足 11 位原样，空显示 -）。
+  String get _boundPhone {
+    final mobile = _mobile;
+    if (mobile.length < 11) {
+      return mobile.isEmpty ? '-' : mobile;
+    }
+    return '${mobile.substring(0, 3)}****${mobile.substring(7)}';
+  }
 
   @override
   void dispose() {
@@ -52,14 +80,28 @@ class _ResetPasswordByPhonePageState extends State<ResetPasswordByPhonePage> {
     });
   }
 
-  void _onGetCode() {
-    if (_isCounting) return;
-    // TODO: 调用发送短信验证码接口（入参 phone = _boundPhone）
-    _showToast('验证码已发送');
-    _startCountdown();
+  Future<void> _onGetCode() async {
+    if (_isCounting || _sendingCode) return;
+    final mobile = _mobile;
+    if (mobile.isEmpty) {
+      _showToast('未获取到绑定手机号，请稍后重试');
+      return;
+    }
+    setState(() => _sendingCode = true);
+    try {
+      // scene=4 重置密码场景（SmsSceneEnum）
+      await AuthApi.sendSmsCode(mobile: mobile, scene: SmsScene.resetPassword);
+      _showToast('验证码已发送');
+      _startCountdown();
+    } catch (e) {
+      _showToast(ApiClient.errorMessage(e));
+    } finally {
+      if (mounted) setState(() => _sendingCode = false);
+    }
   }
 
-  void _submit() {
+  Future<void> _submit() async {
+    if (_submitting) return;
     final code = _codeController.text.trim();
     final newPwd = _newPasswordController.text.trim();
     final confirmPwd = _confirmPasswordController.text.trim();
@@ -72,10 +114,26 @@ class _ResetPasswordByPhonePageState extends State<ResetPasswordByPhonePage> {
       _showToast('两次输入的新密码不一致');
       return;
     }
-    // TODO: 调用重置密码接口
-    _showToast('密码重置成功');
-    // 清空路由栈回到账户安全页
-    Navigator.of(context).popUntil((route) => route.isFirst);
+    final mobile = _mobile;
+    if (mobile.isEmpty) {
+      _showToast('未获取到绑定手机号，请稍后重试');
+      return;
+    }
+    setState(() => _submitting = true);
+    try {
+      await AuthApi.resetPassword(
+        mobile: mobile,
+        code: code,
+        password: newPwd,
+      );
+      _showToast('密码重置成功');
+      // 清空路由栈回到首页
+      if (mounted) Navigator.of(context).popUntil((route) => route.isFirst);
+    } catch (e) {
+      _showToast(ApiClient.errorMessage(e));
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
   }
 
   void _showToast(String msg) {

@@ -17,13 +17,18 @@ class SmsScene {
 class AuthApi {
   /// 发送手机短信验证码。
   /// [scene] 对应后端 SmsSceneEnum：1=用户(手机)登录/注册。
+  /// [tenantId]：注册流程传 0（后端要求），登录/忘记密码默认租户 1。
   static Future<bool> sendSmsCode({
     required String mobile,
     int scene = SmsScene.memberLogin,
+    int? tenantId,
   }) async {
     final resp = await ApiClient.dio.post(
       '/app-api/member/auth/send-sms-code',
       data: {'mobile': mobile, 'scene': scene},
+      options: tenantId == null
+          ? null
+          : Options(headers: {'tenant-id': tenantId}),
     );
     final data = ApiClient.unwrap(resp);
     return data == true;
@@ -41,6 +46,8 @@ class AuthApi {
   }) async {
     final resp = await ApiClient.dio.post(
       '/app-api/member/auth/sms-register',
+      // 注册接口后端要求 tenant-id=0（其余场景租户 1）
+      options: Options(headers: {'tenant-id': 0}),
       data: {
         'mobile': mobile,
         'code': code,

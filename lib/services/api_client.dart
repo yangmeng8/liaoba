@@ -48,7 +48,9 @@ class ApiClient {
       InterceptorsWrapper(
         onRequest: (options, handler) {
           // 统一带上租户编号与登录 Token
-          options.headers['tenant-id'] = tenantId;
+          //（putIfAbsent：方法级 Options 已指定 tenant-id 时不覆盖，
+          //  如注册场景接口要求 tenant-id=0）
+          options.headers.putIfAbsent('tenant-id', () => tenantId);
           final token = AuthManager.instance.accessToken;
           if (token != null && token.isNotEmpty) {
             options.headers['Authorization'] = 'Bearer $token';

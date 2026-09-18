@@ -23,6 +23,9 @@ class GroupAvatar extends StatefulWidget {
 
   final double size;
 
+  /// 圆形头像开关（默认 true，与 ImAvatar 一致）；false 用 [borderRadius]。
+  final bool circle;
+
   final BorderRadius borderRadius;
 
   const GroupAvatar({
@@ -31,8 +34,13 @@ class GroupAvatar extends StatefulWidget {
     required this.src,
     required this.name,
     this.size = 56,
+    this.circle = true,
     this.borderRadius = const BorderRadius.all(Radius.circular(12)),
   });
+
+  /// 实际裁剪圆角：circle 时按尺寸取圆形。
+  BorderRadius get _effectiveRadius =>
+      circle ? BorderRadius.circular(size / 2) : borderRadius;
 
   @override
   State<GroupAvatar> createState() => _GroupAvatarState();
@@ -92,7 +100,8 @@ class _GroupAvatarState extends State<GroupAvatar> {
         src: widget.src,
         name: widget.name,
         size: widget.size,
-        borderRadius: widget.borderRadius,
+        circle: false,
+        borderRadius: widget._effectiveRadius,
       );
     }
     // ② 前 9 名有效成员九宫格
@@ -108,7 +117,8 @@ class _GroupAvatarState extends State<GroupAvatar> {
       src: '',
       name: widget.name,
       size: widget.size,
-      borderRadius: widget.borderRadius,
+      circle: false,
+      borderRadius: widget._effectiveRadius,
     );
   }
 
@@ -122,7 +132,7 @@ class _GroupAvatarState extends State<GroupAvatar> {
     // 格子边长：去内边距后按列数均分（含间距）
     final cell = (widget.size - padding * 2 - gap * (cols - 1)) / cols;
     return ClipRRect(
-      borderRadius: widget.borderRadius,
+      borderRadius: widget._effectiveRadius,
       child: Container(
         width: widget.size,
         height: widget.size,
@@ -159,6 +169,7 @@ class _GroupAvatarState extends State<GroupAvatar> {
       src: m.avatar,
       name: m.nickname,
       size: cell,
+      circle: false,
       borderRadius: BorderRadius.zero,
     );
   }

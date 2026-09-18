@@ -16,7 +16,11 @@ class ImAvatar extends StatelessWidget {
 
   final double size;
 
-  /// 圆角：聊天室内用圆角方形（8），其他场景可传圆形。
+  /// 圆形头像开关（默认 true，微信风格全场景圆形）；
+  /// false 时用 [borderRadius]（圆角方形）。
+  final bool circle;
+
+  /// 圆角（[circle] 为 false 时生效）。
   final BorderRadius borderRadius;
 
   /// 在线状态角标（null 不显示；true 绿点 false 灰点，右下角白描边）。
@@ -27,13 +31,15 @@ class ImAvatar extends StatelessWidget {
     required this.src,
     required this.name,
     this.size = 40,
+    this.circle = true,
     this.borderRadius = const BorderRadius.all(Radius.circular(8)),
     this.online,
   });
 
   @override
   Widget build(BuildContext context) {
-    final radius = borderRadius;
+    final radius =
+        circle ? BorderRadius.circular(size / 2) : borderRadius;
     Widget avatar;
     if (src.isNotEmpty) {
       avatar = ClipRRect(
@@ -86,7 +92,9 @@ class ImAvatar extends StatelessWidget {
       height: size,
       decoration: BoxDecoration(
         color: avatarBgColor(name),
-        borderRadius: borderRadius,
+        // 与图片裁剪同款圆角（默认圆形）
+        borderRadius:
+            circle ? BorderRadius.circular(size / 2) : borderRadius,
       ),
       alignment: Alignment.center,
       child: Text(

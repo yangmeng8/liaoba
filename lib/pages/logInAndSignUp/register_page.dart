@@ -71,6 +71,8 @@ class _RegisterPageState extends State<RegisterPage> {
       await AuthApi.sendSmsCode(
         mobile: _phoneController.text.trim(),
         scene: SmsScene.memberLogin,
+        // 注册流程的验证码接口同样要求 tenant-id=0
+        tenantId: 0,
       );
       _toast('验证码已发送');
       _startCountdown();

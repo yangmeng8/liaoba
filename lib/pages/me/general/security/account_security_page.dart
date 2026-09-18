@@ -1,12 +1,39 @@
 import 'package:flutter/material.dart';
 
+import '../../../../services/auth_api.dart';
+import '../../../../services/auth_manager.dart';
 import '../../../../shared/app_theme.dart';
 import 'change_bound_phone_page.dart';
 import 'change_password_page.dart';
 
 /// The account security settings shown from the general settings page.
-class AccountSecurityPage extends StatelessWidget {
+class AccountSecurityPage extends StatefulWidget {
   const AccountSecurityPage({super.key});
+
+  @override
+  State<AccountSecurityPage> createState() => _AccountSecurityPageState();
+}
+
+class _AccountSecurityPageState extends State<AccountSecurityPage> {
+  @override
+  void initState() {
+    super.initState();
+    // 缓存无手机号时静默刷新用户资料（member/user/get）
+    if ((AuthManager.instance.mobile ?? '').isEmpty) {
+      AuthApi.loadUserProfile().then((_) {
+        if (mounted) setState(() {});
+      }).catchError((Object _) {});
+    }
+  }
+
+  /// 手机号打码：185****4829（不足 11 位原样显示）。
+  String get _maskedMobile {
+    final mobile = AuthManager.instance.mobile ?? '';
+    if (mobile.length < 11) {
+      return mobile.isEmpty ? '-' : mobile;
+    }
+    return '${mobile.substring(0, 3)}****${mobile.substring(7)}';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -63,7 +90,7 @@ class AccountSecurityPage extends StatelessWidget {
                         ),
                         _SecurityRow(
                           title: '修改绑定手机号',
-                          trailing: '185****4829',
+                          trailing: _maskedMobile,
                           onTap: () => Navigator.of(context).push(
                             MaterialPageRoute(
                                 builder: (_) => const ChangeBoundPhonePage()),
