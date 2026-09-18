@@ -20,10 +20,18 @@ class FacePickerSheet extends StatefulWidget {
   /// 选择图片表情（立即发送 FACE 消息）。
   final ValueChanged<ImFaceItem> onFaceSelected;
 
+  /// 右下角叉号：删除输入框末尾的表情/字符（逐个退格）。
+  final VoidCallback onBackspace;
+
+  /// 右下角发送：发送当前输入框内容（emoji 随文本发出）。
+  final VoidCallback onSend;
+
   const FacePickerSheet({
     super.key,
     required this.onEmojiSelected,
     required this.onFaceSelected,
+    required this.onBackspace,
+    required this.onSend,
   });
 
   @override
@@ -139,7 +147,7 @@ class _FacePickerSheetState extends State<FacePickerSheet>
               child: TabBarView(
                 controller: ctrl,
                 children: [
-                  _buildEmojiGrid(colors),
+                  _buildEmojiTab(colors),
                   _buildFaceGrid(colors, _userItems, deletable: true),
                   for (final p in _packs)
                     _buildFaceGrid(colors, p.items, deletable: false),
@@ -149,6 +157,52 @@ class _FacePickerSheetState extends State<FacePickerSheet>
           ],
         ),
       ),
+    );
+  }
+
+  /// emoji 页签：网格 + 底部操作栏（叉号退格 / 发送，仅此页签显示）。
+  Widget _buildEmojiTab(ThemeColors colors) {
+    return Column(
+      children: [
+        Expanded(child: _buildEmojiGrid(colors)),
+        // 底部操作栏：右下角叉号（删末尾表情）+ 发送（发输入框内容）
+        Container(
+          decoration: BoxDecoration(
+            border: Border(top: BorderSide(color: colors.divider)),
+          ),
+          padding: const EdgeInsets.fromLTRB(12, 2, 12, 6),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              IconButton(
+                tooltip: '删除表情',
+                onPressed: widget.onBackspace,
+                icon: Icon(Icons.close, size: 22, color: colors.muted),
+              ),
+              const SizedBox(width: 8),
+              GestureDetector(
+                onTap: widget.onSend,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 18, vertical: 7),
+                  decoration: BoxDecoration(
+                    color: AppColors.lime,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Text(
+                    '发送',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.black,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 

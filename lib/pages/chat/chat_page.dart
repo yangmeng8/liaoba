@@ -1656,6 +1656,18 @@ class _ChatPageState extends State<ChatPage> {
                       _sendFace(item);
                       setState(() => _facePanelOpen = false);
                     },
+                    // 右下角叉号：删输入框末尾表情/字符（按字素逐个退格，
+                    // emoji 可能是多 code unit，用 characters 处理）
+                    onBackspace: () {
+                      final text = _inputCtrl.text;
+                      if (text.isEmpty) return;
+                      _inputCtrl.text =
+                          text.characters.skipLast(1).toString();
+                      _inputCtrl.selection = TextSelection.collapsed(
+                          offset: _inputCtrl.text.length);
+                    },
+                    // 右下角发送：发送输入框内容（emoji 随文本发出）
+                    onSend: () => _send(),
                   ),
                 // 内嵌更多（+）面板：与表情面板互斥
                 if (_morePanelOpen) _buildMorePanel(colors),

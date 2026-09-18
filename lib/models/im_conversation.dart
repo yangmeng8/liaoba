@@ -1,4 +1,5 @@
 import '../shared/json_utils.dart';
+import 'im_message.dart' show parseDateTime;
 
 /// 会话类型（对应后端 ImConversationTypeEnum：1=私聊 2=群聊 3=频道）。
 enum ImConversationType {
@@ -77,7 +78,7 @@ class ImFriend {
       displayNamePinyin: asString(json['displayNamePinyin']),
       nicknamePinyin: asString(json['nicknamePinyin']),
       addSource: asInt(json['addSource']),
-      addTime: DateTime.tryParse(asString(json['addTime'])),
+      addTime: parseDateTime(json['addTime']),
     );
   }
 
@@ -201,7 +202,7 @@ class ImGroupMember {
       displayUserName: asString(json['displayUserName']),
       role: asInt(json['role'], ImGroupRole.normal),
       status: asInt(json['status']),
-      muteEndTime: DateTime.tryParse(json['muteEndTime']?.toString() ?? ''),
+      muteEndTime: parseDateTime(json['muteEndTime']),
     );
   }
 
@@ -258,8 +259,8 @@ class ImGroupRequest {
       handleResult: asInt(json['handleResult']),
       applyContent: asString(json['applyContent']),
       handleContent: asString(json['handleContent']),
-      handleTime: DateTime.tryParse(json['handleTime']?.toString() ?? ''),
-      createTime: DateTime.tryParse(json['createTime']?.toString() ?? ''),
+      handleTime: parseDateTime(json['handleTime']),
+      createTime: parseDateTime(json['createTime']),
       userNickname: asString(json['userNickname']),
       userAvatar: asString(json['userAvatar']),
     );
@@ -327,8 +328,8 @@ class ImFriendRequest {
       applyContent: asString(json['applyContent']),
       handleContent: asString(json['handleContent']),
       addSource: asInt(json['addSource']),
-      handleTime: DateTime.tryParse(json['handleTime']?.toString() ?? ''),
-      createTime: DateTime.tryParse(json['createTime']?.toString() ?? ''),
+      handleTime: parseDateTime(json['handleTime']),
+      createTime: parseDateTime(json['createTime']),
       fromNickname: asString(json['fromNickname']),
       fromAvatar: asString(json['fromAvatar']),
       toNickname: asString(json['toNickname']),
@@ -370,7 +371,7 @@ class ImConversationRead {
           ImConversationType.fromValue(asInt(json['conversationType'], -1)),
       targetId: asInt(json['targetId']),
       messageId: asInt(json['messageId']),
-      updateTime: DateTime.tryParse(json['updateTime']?.toString() ?? ''),
+      updateTime: parseDateTime(json['updateTime']),
     );
   }
 }

@@ -205,13 +205,22 @@ class ImChannelMessage {
   }
 }
 
-/// 解析后端时间字段：兼容时间戳（num）与 date-time 字符串两种形式。
+/// 解析后端时间字段：兼容时间戳（num / 数字字符串）与 date-time 字符串。
 DateTime? parseDateTime(dynamic value) {
   if (value == null) return null;
   if (value is num) return DateTime.fromMillisecondsSinceEpoch(value.toInt());
   final str = value.toString();
   if (str.isEmpty) return null;
-  return DateTime.tryParse(str);
+  final dt = DateTime.tryParse(str);
+  if (dt != null) return dt;
+  // 纯数字字符串：Long 时间戳被后端序列化为 string 的场景
+  // （秒级 10 位补毫秒；毫秒级 13 位直接用）
+  final ts = int.tryParse(str);
+  if (ts != null && ts > 0) {
+    return DateTime.fromMillisecondsSinceEpoch(
+        str.length <= 10 ? ts * 1000 : ts);
+  }
+  return null;
 }
 
 /// 解析 int 列表字段：兼容 List 与 JSON 字符串（如 "[1,2,3]"）两种形式。
