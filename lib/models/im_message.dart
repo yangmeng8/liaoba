@@ -65,6 +65,13 @@ class ImPrivateMessage {
     }
     if (type == ImSystemMessageType.friendDelete) return '你已删除好友';
     if (type == ImSystemMessageType.recall) return '[消息已撤回]';
+    if (type == ImSystemMessageType.burnDelete) return '删除了消息';
+    if (type == ImSystemMessageType.burnSet) {
+      final label = burnDurationLabel(_burnDurationFromContent(content));
+      return isSelf
+          ? '你设置了消息已读$label后销毁'
+          : '对方设置了消息已读$label后销毁';
+    }
     final label = mediaSummaryLabel(type);
     if (label != null) return label;
     return extractTextContent(content);
@@ -149,6 +156,13 @@ class ImGroupMessage {
       return text.isNotEmpty ? text : '[群通知]';
     }
     if (type == ImSystemMessageType.recall) return '[消息已撤回]';
+    if (type == ImSystemMessageType.burnDelete) return '删除了消息';
+    if (type == ImSystemMessageType.burnSet) {
+      final label = burnDurationLabel(_burnDurationFromContent(content));
+      return isSelf
+          ? '你设置了消息已读$label后销毁'
+          : '对方设置了消息已读$label后销毁';
+    }
     final label = mediaSummaryLabel(type);
     if (label != null) return label;
     return extractTextContent(content);
@@ -260,6 +274,46 @@ class ImSystemMessageType {
   /// 撤回信号消息：content = {messageId} 指向被撤回原消息。
   /// 原消息 status 同步改为 RECALL(2)；信号消息本身不渲染。
   static const int recall = 2101;
+
+  /// 阅后即焚：消息焚毁通知（消息到期销毁）。
+  static const int burnDelete = 2203;
+
+  /// 阅后即焚：设置变更通知（双方同步设置状态）。
+  static const int burnSet = 2204;
+}
+
+/// 阅后即焚时长人性化（秒 → 可读文案）：
+/// 30→「30秒」、90→「1分钟30秒」、86400→「1天」、604800→「1星期」。
+String burnDurationLabel(int seconds) {
+  if (seconds <= 0) return '';
+  const units = [
+    (2419200, '星期'), // 4 星期
+    (86400, '天'),
+    (3600, '小时'),
+    (60, '分钟'),
+    (1, '秒'),
+  ];
+  final parts = <String>[];
+  var rest = seconds;
+  for (final (u, label) in units) {
+    final v = rest ~/ u;
+    if (v > 0) {
+      parts.add('$v$label');
+      rest %= u;
+    }
+  }
+  return parts.join();
+}
+
+/// 解析 2204 设置通知 content 里的 burnDuration（秒）。
+int _burnDurationFromContent(String content) {
+  try {
+    final decoded = jsonDecode(content);
+    if (decoded is Map) return asInt(decoded['burnDuration']);
+  } catch (_) {
+    // 非 JSON
+  }
+  return 0;
 }
 
 /// 群广播事件类型（1501~1533，服务端群操作时自动落库推全群；

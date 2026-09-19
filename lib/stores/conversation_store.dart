@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/im_conversation.dart';
 import '../models/im_message.dart';
 import '../models/im_ws_frame.dart';
+import '../shared/json_utils.dart';
 import '../services/auth_manager.dart';
 import '../services/im_api.dart';
 import '../services/im_websocket.dart';
@@ -92,6 +93,23 @@ class ConversationStore with ChangeNotifier {
       }
     } else if (n.contentType == ImSystemMessageType.friendDelete) {
       _privateMsgs.clear();
+    } else if (n.contentType == ImSystemMessageType.burnDelete) {
+      // 阅后即焚销毁（2203）：服务端已删该消息，增量游标拉不到变化，
+      // 按 payload.messageId 精确移除本地缓存（会话列表同步刷新）
+      final burnedId = asInt(n.payload['messageId']);
+      if (burnedId > 0) {
+        switch (n.conversationType) {
+          case 1:
+            _privateMsgs.removeWhere((m) => m.id == burnedId);
+            break;
+          case 2:
+            _groupMsgs.removeWhere((m) => m.id == burnedId);
+            break;
+          case 3:
+            _channelMsgs.removeWhere((m) => m.id == burnedId);
+            break;
+        }
+      }
     }
     _scheduleReload();
   }

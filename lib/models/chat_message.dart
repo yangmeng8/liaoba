@@ -42,8 +42,14 @@ class ChatMsgType {
   /// 好友删除通知（系统消息）。
   static const int friendDeleted = 1205;
 
-  /// 撤回信号消息：content = {messageId} 指向原消息，本身不渲染。
+  /// 撤回信号消息：content = {messageId} 指向被撤回原消息，本身不渲染。
   static const int recallSignal = 2101;
+
+  /// 阅后即焚：消息焚毁通知（2203，消息到期销毁）。
+  static const int burnDeleted = 2203;
+
+  /// 阅后即焚：设置变更通知（2204，双方同步设置状态）。
+  static const int burnSettingChanged = 2204;
 
   /// 通话开始系统消息（1610，仅群聊落库）。
   static const int rtcCallStart = 1610;
@@ -750,6 +756,15 @@ class ChatMessage {
         return '你们已经是好友了，开始聊天吧';
       case ChatMsgType.friendDeleted:
         return '你已删除好友';
+      case ChatMsgType.burnDeleted:
+        return '删除了消息';
+      case ChatMsgType.burnSettingChanged:
+        // 2204：按设置人区分文案；时长从 content.burnDuration 解析
+        final label = burnDurationLabel(
+            asInt(contentMap['burnDuration']));
+        return isSelf
+            ? '你设置了消息已读$label后销毁'
+            : '对方设置了消息已读$label后销毁';
       default:
         // 群广播事件：结构化文案（纯文本口径）
         if (isGroupNotificationType(type)) {
@@ -794,10 +809,12 @@ class ChatMessage {
     }
     // 群广播事件：居中（自己操作的也显示）
     if (isGroupNotificationType(type)) return true;
-    // 好友关系事件 / 撤回信号（信号正常会被过滤，兜底居中）
+    // 好友关系事件 / 撤回信号 / 阅后即焚通知（信号正常会被过滤，兜底居中）
     if (type == ChatMsgType.friendAdded ||
         type == ChatMsgType.friendDeleted ||
-        type == ChatMsgType.recallSignal) {
+        type == ChatMsgType.recallSignal ||
+        type == ChatMsgType.burnDeleted ||
+        type == ChatMsgType.burnSettingChanged) {
       return true;
     }
     // 频道素材等：非聊天主体消息仍走气泡

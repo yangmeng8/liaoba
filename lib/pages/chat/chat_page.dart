@@ -178,11 +178,19 @@ class _ChatPageState extends State<ChatPage> {
       }
     });
     _wsSub = ImWebSocket.instance.notificationStream.listen((n) {
-      if (_matchesCurrentConversation(n)) {
-        // 防抖合并：短时间多条通知只刷新一次
-        _wsRefreshTimer?.cancel();
-        _wsRefreshTimer = Timer(_wsRefreshDebounce, _refreshLatest);
+      if (!_matchesCurrentConversation(n)) return;
+      // 阅后即焚销毁（2203）：被销毁消息服务端已删，增量合并只加不删，
+      // 需按 payload.messageId 精确从本地列表移除
+      if (n.contentType == ChatMsgType.burnDeleted) {
+        final burnedId = asInt(n.payload['messageId']);
+        final had = _messages.any((m) => m.id == burnedId);
+        if (had && mounted) {
+          setState(() => _messages.removeWhere((m) => m.id == burnedId));
+        }
       }
+      // 防抖合并：短时间多条通知只刷新一次
+      _wsRefreshTimer?.cancel();
+      _wsRefreshTimer = Timer(_wsRefreshDebounce, _refreshLatest);
     });
     // 私聊：好友在线状态变化 → 顶栏「在线/离线」实时刷新
     if (_isPrivate) {
