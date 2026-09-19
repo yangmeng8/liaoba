@@ -67,10 +67,15 @@ class ImPrivateMessage {
     if (type == ImSystemMessageType.recall) return '[消息已撤回]';
     if (type == ImSystemMessageType.burnDelete) return '删除了消息';
     if (type == ImSystemMessageType.burnSet) {
-      final label = burnDurationLabel(_burnDurationFromContent(content));
+      // 0 秒=关闭
+      final d = _burnDurationFromContent(content);
+      if (d <= 0) {
+        return isSelf ? '您已关闭阅后即焚' : '对方已关闭阅后即焚';
+      }
+      final label = burnDurationLabel(d);
       return isSelf
-          ? '你设置了消息已读$label后销毁'
-          : '对方设置了消息已读$label后销毁';
+          ? '您已设置消息已读$label后销毁'
+          : '对方已设置消息已读$label后销毁';
     }
     final label = mediaSummaryLabel(type);
     if (label != null) return label;
@@ -158,10 +163,15 @@ class ImGroupMessage {
     if (type == ImSystemMessageType.recall) return '[消息已撤回]';
     if (type == ImSystemMessageType.burnDelete) return '删除了消息';
     if (type == ImSystemMessageType.burnSet) {
-      final label = burnDurationLabel(_burnDurationFromContent(content));
+      // 0 秒=关闭
+      final d = _burnDurationFromContent(content);
+      if (d <= 0) {
+        return isSelf ? '您已关闭阅后即焚' : '对方已关闭阅后即焚';
+      }
+      final label = burnDurationLabel(d);
       return isSelf
-          ? '你设置了消息已读$label后销毁'
-          : '对方设置了消息已读$label后销毁';
+          ? '您已设置消息已读$label后销毁'
+          : '对方已设置消息已读$label后销毁';
     }
     final label = mediaSummaryLabel(type);
     if (label != null) return label;

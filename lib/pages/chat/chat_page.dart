@@ -188,6 +188,10 @@ class _ChatPageState extends State<ChatPage> {
           setState(() => _messages.removeWhere((m) => m.id == burnedId));
         }
       }
+      // 阅后即焚设置（2204）：服务端可能不落库，本地直接插入居中提示
+      if (n.contentType == ChatMsgType.burnSettingChanged) {
+        _insertBurnSettingNotice(n.payload);
+      }
       // 防抖合并：短时间多条通知只刷新一次
       _wsRefreshTimer?.cancel();
       _wsRefreshTimer = Timer(_wsRefreshDebounce, _refreshLatest);
@@ -526,9 +530,19 @@ class _ChatPageState extends State<ChatPage> {
       }
       final merged = map.values.toList()
         ..sort((a, b) {
-          final ka = a.id ?? (1 << 62);
-          final kb = b.id ?? (1 << 62);
-          return kb.compareTo(ka); // id 倒序，本地占位视为最新
+          // 时间倒序（最新在前）：本地占位（2204 提示等）按各自插入
+          // 时刻与历史消息混排，后续新消息会把它顶上去；
+          // 服务端消息 sendTime 与本地占位同为本地时区 DateTime，可直接比较
+          final ta =
+              a.sendTime ?? DateTime.fromMillisecondsSinceEpoch(1 << 40);
+          final tb =
+              b.sendTime ?? DateTime.fromMillisecondsSinceEpoch(1 << 40);
+          final c = tb.compareTo(ta);
+          if (c != 0) return c;
+          // 同一时刻：服务端消息按 id 倒序；本地占位（id=null 视作 0）随后
+          final ka = a.id ?? 0;
+          final kb = b.id ?? 0;
+          return kb.compareTo(ka);
         });
       setState(() => _messages = merged);
       if (nearBottom) {
@@ -539,6 +553,30 @@ class _ChatPageState extends State<ChatPage> {
     } catch (_) {
       // 刷新失败静默：保持现有列表，等待下次通知或 resync
     }
+  }
+
+  /// 本地插入 2204 设置提示（服务端可能不落库，收到推送即插居中灰条）。
+  /// 时长按 burnDurationLabel 人性化（3600 → 1小时）。
+  void _insertBurnSettingNotice(Map<String, dynamic> payload) {
+    final duration = asInt(payload['burnDuration']);
+    final senderId = asInt(payload['senderId']);
+    final now = DateTime.now();
+    final msg = ChatMessage(
+      clientMessageId: 'c\$burn-${now.millisecondsSinceEpoch}',
+      senderId: senderId,
+      type: ChatMsgType.burnSettingChanged,
+      content: jsonEncode({'burnDuration': duration}),
+      sendTime: now,
+      status: ChatMessageStatus.sent,
+      isSelf: senderId == (AuthManager.instance.userId ?? 0),
+    );
+    if (!mounted) return;
+    setState(() {
+      // 覆盖语义：再次设置时移除旧提示，新提示落到最新位置
+      _messages.removeWhere((m) => m.type == ChatMsgType.burnSettingChanged);
+      _messages.insert(0, msg);
+    });
+    _scrollToBottom();
   }
 
   /// 通知是否属于当前会话：类型匹配 + payload 任一目标字段命中 targetId

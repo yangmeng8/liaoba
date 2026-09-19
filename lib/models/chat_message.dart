@@ -759,12 +759,15 @@ class ChatMessage {
       case ChatMsgType.burnDeleted:
         return '删除了消息';
       case ChatMsgType.burnSettingChanged:
-        // 2204：按设置人区分文案；时长从 content.burnDuration 解析
-        final label = burnDurationLabel(
-            asInt(contentMap['burnDuration']));
+        // 2204：0 秒=关闭；时长从 content.burnDuration 解析
+        final d = asInt(contentMap['burnDuration']);
+        if (d <= 0) {
+          return isSelf ? '您已关闭阅后即焚' : '对方已关闭阅后即焚';
+        }
+        final label = burnDurationLabel(d);
         return isSelf
-            ? '你设置了消息已读$label后销毁'
-            : '对方设置了消息已读$label后销毁';
+            ? '您已设置消息已读$label后销毁'
+            : '对方已设置消息已读$label后销毁';
       default:
         // 群广播事件：结构化文案（纯文本口径）
         if (isGroupNotificationType(type)) {
