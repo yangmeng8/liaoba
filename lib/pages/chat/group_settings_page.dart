@@ -14,6 +14,7 @@ import '../../services/im_api.dart';
 import '../../services/im_websocket.dart';
 import '../../shared/app_colors.dart';
 import '../../shared/app_theme.dart';
+import '../../shared/burn_picker.dart';
 import '../../shared/im_avatar.dart';
 import '../../shared/json_utils.dart';
 import '../../stores/conversation_store.dart';
@@ -69,6 +70,10 @@ class _GroupSettingsPageState extends State<GroupSettingsPage> {
   bool _mySilent = false;
   bool _pinned = false;
   bool _actionRunning = false;
+
+  /// 阅后即焚：当前配置（默认关）。
+  bool _burnEnabled = false;
+  int _burnDuration = 0;
 
   /// 成员九宫格搜索关键词 + 折叠展开。
   final _memberSearchCtrl = TextEditingController();
@@ -176,12 +181,28 @@ class _GroupSettingsPageState extends State<GroupSettingsPage> {
         _loading = false;
       });
       _syncPinned();
+      _loadBurnSetting();
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _loading = false;
         _error = ApiClient.errorMessage(e);
       });
+    }
+  }
+
+  /// 静默拉阅后即焚配置（群聊 get 传 groupId；失败保持默认关）。
+  Future<void> _loadBurnSetting() async {
+    try {
+      final burn = await ImApi.getBurnSetting(widget.groupId);
+      if (burn != null && mounted) {
+        setState(() {
+          _burnEnabled = burn.enabled;
+          _burnDuration = burn.duration;
+        });
+      }
+    } catch (_) {
+      // 静默
     }
   }
 
@@ -843,6 +864,27 @@ class _GroupSettingsPageState extends State<GroupSettingsPage> {
     }
   }
 
+  /// 应用阅后即焚设置并刷新（0=关闭；群聊 set 传 groupId）。
+  Future<void> _setBurn(int duration) async {
+    try {
+      await ImApi.setBurnSetting(
+        conversationType: ImConversationType.group,
+        groupId: widget.groupId,
+        burnDuration: duration,
+      );
+      if (!mounted) return;
+      setState(() {
+        _burnEnabled = duration > 0;
+        _burnDuration = duration;
+      });
+      _showMsg(duration > 0
+          ? '已设置阅后即焚：${burnDurationLabel(duration)}'
+          : '已关闭阅后即焚');
+    } catch (e) {
+      _showMsg(ApiClient.errorMessage(e));
+    }
+  }
+
   // ==================== switch（先切 UI 再请求，失败回滚） ====================
 
   Future<void> _toggleMutedAll(bool value) async {
@@ -1414,6 +1456,27 @@ class _GroupSettingsPageState extends State<GroupSettingsPage> {
             leading: const Icon(Icons.notifications_off_outlined, size: 22),
             title: '消息免打扰',
             trailing: Switch(value: _mySilent, onChanged: _toggleSilent),
+          ),
+          Divider(height: 1, indent: 54, color: colors.divider),
+          _buildCell(
+            colors,
+            leading: const Icon(Icons.local_fire_department_outlined,
+                size: 22),
+            title: '阅后即焚',
+            trailing: Text(
+              !_burnEnabled || _burnDuration <= 0
+                  ? '关'
+                  : burnDurationLabel(_burnDuration),
+              style: TextStyle(fontSize: 15, color: colors.muted),
+            ),
+            chevron: true,
+            onTap: _isQuitGroupDetail
+                ? null
+                : () => showBurnPickerSheet(
+                      context,
+                      currentDuration: _burnEnabled ? _burnDuration : 0,
+                      onSet: _setBurn,
+                    ),
           ),
         ],
       ),

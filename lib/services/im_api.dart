@@ -709,26 +709,31 @@ class ImApi {
     return ImGroup.fromJson(ApiClient.unwrap(resp));
   }
 
-  /// 设置私聊会话阅后即焚
+  /// 设置会话阅后即焚
   /// （POST /app-api/im/conversation-setting/set）。
+  /// 私聊传 [targetId]（对方用户ID）；群聊传 [groupId]。
   /// [burnDuration] 焚毁时长（秒）：0=关闭，其余为生效时长。
   static Future<void> setBurnSetting({
-    required int targetId,
+    ImConversationType conversationType = ImConversationType.private,
+    int? targetId,
+    int? groupId,
     required int burnDuration,
   }) async {
     await ApiClient.dio.post(
       '/app-api/im/conversation-setting/set',
       data: {
-        'conversationType': ImConversationType.private.value,
-        'targetId': targetId,
+        'conversationType': conversationType.value,
+        if (conversationType == ImConversationType.private)
+          'targetId': targetId,
+        if (conversationType == ImConversationType.group) 'groupId': groupId,
         'burnDuration': burnDuration,
       },
     );
   }
 
-  /// 查询私聊会话阅后即焚配置
+  /// 查询会话阅后即焚配置
   /// （GET /app-api/im/conversation-setting/get?targetId=）。
-  /// 未设置过时返回 null。
+  /// 私聊传对方 userId；群聊传 groupId。未设置过时返回 null。
   static Future<({bool enabled, int duration})?> getBurnSetting(
       int targetId) async {
     final resp = await ApiClient.dio.get(

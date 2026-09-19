@@ -1,4 +1,3 @@
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../../models/im_conversation.dart';
@@ -9,6 +8,7 @@ import '../../services/auth_manager.dart';
 import '../../services/im_api.dart';
 import '../../shared/app_colors.dart';
 import '../../shared/app_theme.dart';
+import '../../shared/burn_picker.dart';
 import '../../shared/im_avatar.dart';
 import '../chat/chat_page.dart';
 
@@ -51,22 +51,6 @@ class _UserProfilePageState extends State<UserProfilePage> {
   /// 阅后即焚：当前配置（默认关）。
   bool _burnEnabled = false;
   int _burnDuration = 0;
-
-  /// 预置时长选项（从上到下；0=关）。
-  static const _burnPresets = [
-    ('关', 0),
-    ('4个星期', 2419200),
-    ('1个星期', 604800),
-    ('1天', 86400),
-    ('8小时', 28800),
-    ('1小时', 3600),
-    ('5分钟', 300),
-    ('30秒', 30),
-  ];
-
-  /// 自定义单位（秒数；左侧数字范围：秒/分钟/小时 1-59、天 1-6、周 1-4）。
-  static const _burnUnitSeconds = [1, 60, 3600, 86400, 604800];
-  static const _burnUnitLabels = ['秒', '分钟', '小时', '天', '周'];
 
   @override
   void initState() {
@@ -270,10 +254,6 @@ class _UserProfilePageState extends State<UserProfilePage> {
   String get _burnLabel =>
       !_burnEnabled || _burnDuration <= 0 ? '关' : burnDurationLabel(_burnDuration);
 
-  /// 是否为预置选项（否则属于自定义值）。
-  bool _isPresetDuration(int d) =>
-      _burnPresets.any((p) => p.$2 == d);
-
   /// 选项框：关 / 4星期 / 1星期 / 1天 / 8小时 / 1小时 / 5分钟 / 30秒 / 自定义。
   Future<void> _showBurnPicker() async {
     // 打开前刷新远端配置（可能是对方刚设置的）
@@ -289,198 +269,12 @@ class _UserProfilePageState extends State<UserProfilePage> {
       // 静默：用页面已有配置
     }
     if (!mounted) return;
-    final colors = context.colors;
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: colors.card,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Padding(
-                padding: EdgeInsets.only(top: 14, bottom: 6),
-                child: Text('阅后即焚',
-                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-              ),
-              for (final (label, d) in _burnPresets)
-                _buildBurnOptionRow(colors, label, d, isCustom: false),
-              _buildBurnOptionRow(colors, '自定义时间', _burnDuration,
-                  isCustom: true),
-              const SizedBox(height: 8),
-            ],
-          ),
-        ),
-      ),
+    await showBurnPickerSheet(
+      context,
+      currentDuration: _burnEnabled ? _burnDuration : 0,
+      onSet: _setBurn,
     );
   }
-
-  /// 选项行（选中打绿色勾；自定义带右箭头跳二级选择）。
-  Widget _buildBurnOptionRow(
-    ThemeColors colors,
-    String label,
-    int value, {
-    required bool isCustom,
-  }) {
-    // 选中态：自定义行在当前值非预置且 >0 时勾选；预置行精确匹配
-    final selected = isCustom
-        ? (_burnEnabled && _burnDuration > 0 && !_isPresetDuration(_burnDuration))
-        : (_burnEnabled ? _burnDuration == value : value == 0);
-    return InkWell(
-      onTap: () {
-        Navigator.of(context).pop();
-        if (isCustom) {
-          _showCustomBurnPicker();
-        } else {
-          _setBurn(value);
-        }
-      },
-      child: SizedBox(
-        height: 52,
-        child: Row(
-          children: [
-            const SizedBox(width: 20),
-            Expanded(
-              child: Text(label,
-                  style: TextStyle(fontSize: 16, color: colors.text)),
-            ),
-            if (isCustom)
-              Icon(Icons.chevron_right, size: 20, color: colors.muted),
-            if (selected) ...[
-              const SizedBox(width: 4),
-              const Icon(Icons.check,
-                  size: 20, color: Color(0xFF07C160)),
-            ],
-            const SizedBox(width: 20),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// 二级弹框：自定义时间（左数字 1-59 / 右单位；天 1-6、周 1-4，单位默认秒）。
-  Future<void> _showCustomBurnPicker() async {
-    // 回显当前自定义值（可整除且在范围内才回显，否则默认 秒/1）
-    var unitIdx = 0;
-    var numIdx = 0;
-    if (_burnDuration > 0) {
-      for (var i = 0; i < _burnUnitSeconds.length; i++) {
-        final u = _burnUnitSeconds[i];
-        if (_burnDuration % u == 0) {
-          final n = _burnDuration ~/ u;
-          final max = _maxNumberOfUnit(i);
-          if (n >= 1 && n <= max) {
-            unitIdx = i;
-            numIdx = n - 1;
-            break;
-          }
-        }
-      }
-    }
-    final numCtrl = FixedExtentScrollController(initialItem: numIdx);
-    final unitCtrl = FixedExtentScrollController(initialItem: unitIdx);
-    final colors = context.colors;
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: colors.card,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSheet) {
-          int maxOf(int u) => _maxNumberOfUnit(u);
-          return SafeArea(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Padding(
-                  padding: EdgeInsets.only(top: 14, bottom: 6),
-                  child: Text('自定义时间',
-                      style: TextStyle(
-                          fontSize: 15, fontWeight: FontWeight.w600)),
-                ),
-                SizedBox(
-                  height: 200,
-                  child: Row(
-                    children: [
-                      // 左：数字（1-59；天 1-6、周 1-4 随单位联动）
-                      Expanded(
-                        child: CupertinoPicker(
-                          scrollController: numCtrl,
-                          itemExtent: 40,
-                          onSelectedItemChanged: (_) {},
-                          children: [
-                            for (var i = 1; i <= maxOf(unitIdx); i++)
-                              Center(
-                                child: Text('$i',
-                                    style: TextStyle(
-                                        fontSize: 20, color: colors.text)),
-                              ),
-                          ],
-                        ),
-                      ),
-                      // 右：单位（默认秒）
-                      Expanded(
-                        child: CupertinoPicker(
-                          scrollController: unitCtrl,
-                          itemExtent: 40,
-                          onSelectedItemChanged: (i) {
-                            // 切单位：数字范围变化并重置到 1
-                            numCtrl.jumpToItem(0);
-                            setSheet(() => unitIdx = i);
-                          },
-                          children: [
-                            for (final l in _burnUnitLabels)
-                              Center(
-                                child: Text(l,
-                                    style: TextStyle(
-                                        fontSize: 20, color: colors.text)),
-                              ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 6, 20, 14),
-                  child: SizedBox(
-                    width: double.infinity,
-                    height: 46,
-                    child: FilledButton(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: AppColors.lime,
-                        foregroundColor: Colors.black,
-                      ),
-                      onPressed: () {
-                        Navigator.of(ctx).pop();
-                        _setBurn((numCtrl.selectedItem + 1) *
-                            _burnUnitSeconds[unitIdx]);
-                      },
-                      child: const Text('确定',
-                          style: TextStyle(fontSize: 16)),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-    numCtrl.dispose();
-    unitCtrl.dispose();
-  }
-
-  /// 单位对应的数字上限：秒/分钟/小时 1-59、天 1-6、周 1-4。
-  int _maxNumberOfUnit(int unitIdx) => switch (unitIdx) {
-        3 => 6, // 天
-        4 => 4, // 周
-        _ => 59,
-      };
 
   /// 应用设置并刷新（0=关闭）。
   Future<void> _setBurn(int duration) async {
