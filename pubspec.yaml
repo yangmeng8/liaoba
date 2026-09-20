@@ -35,6 +35,7 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
   image_picker: ^1.1.2
+  pro_image_editor: 11.18.3  # 图片编辑器（涂鸦/文字/裁剪/滤镜/调节/模糊/表情）
   package_info_plus: ^8.1.3
   shared_preferences: ^2.3.2
   qr_flutter: ^4.1.0
@@ -50,6 +51,7 @@ dependencies:
   open_filex: ^4.7.0
   video_compress: ^3.1.2
   livekit_client: ^2.12.0
+  path: ^1.9.1
 
 dev_dependencies:
   flutter_test:

@@ -593,7 +593,7 @@ packages:
     source: hosted
     version: "3.2.1"
   path:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: path
       sha256: "75cca69d1490965be98c73ceaea117e8a04dd21217b37b292c9ddbec0d955bc5"
@@ -688,6 +688,14 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "4.0.0"
+  pro_image_editor:
+    dependency: "direct main"
+    description:
+      name: pro_image_editor
+      sha256: "6565d5403d246fe0b65fd6d5e96adb7ce800b101a2c90b0dc3f9d3698035c088"
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "11.18.3"
   protobuf:
     dependency: transitive
     description:

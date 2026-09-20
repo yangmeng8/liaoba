@@ -33,12 +33,14 @@ import '../../services/im_websocket.dart';
 import '../../shared/app_colors.dart';
 import '../../shared/app_theme.dart';
 import '../../shared/chat_background.dart';
+import '../../shared/image_edit_utils.dart';
 import '../../shared/im_avatar.dart';
 import '../../shared/json_utils.dart';
 import '../../stores/conversation_store.dart';
 import 'face_picker_sheet.dart';
 import 'group_settings_page.dart';
 import 'hold_to_talk_button.dart';
+import 'image_preview_with_edit_page.dart';
 import '../contacts/user_profile_page.dart';
 import 'material_detail_page.dart';
 
@@ -726,27 +728,54 @@ class _ChatPageState extends State<ChatPage> {
     });
   }
 
-  /// 照片 / 拍摄：source 区分相册或相机。
+  /// 照片 / 拍摄：source 区分相册或相机（发送前均可编辑）。
   Future<void> _handleSendImage(ImageSource source) async {
     setState(() => _morePanelOpen = false);
     final picker = ImagePicker();
-    final XFile? file;
     try {
-      // 选图即压缩（对齐 H5 compressed 语义）：最长边 2560 + 质量 80，
-      // 相机原图可达 8~12MB，超过服务器 nginx ~10MB 限制会 413
-      file = await picker.pickImage(
-        source: source,
-        maxWidth: 2560,
-        maxHeight: 2560,
-        imageQuality: 80,
-      );
+      if (source == ImageSource.gallery) {
+        // 相册多选 → 预览 + 编辑页 → 确认后逐张发送
+        final files = await picker.pickMultiImage(
+          maxWidth: 2560,
+          maxHeight: 2560,
+          imageQuality: 80,
+        );
+        if (files.isEmpty || !mounted) return;
+        final paths = await Navigator.of(context).push<List<String>>(
+          MaterialPageRoute(
+            builder: (_) => ImagePreviewWithEditPage(
+              paths: files.map((f) => f.path).toList(),
+            ),
+          ),
+        );
+        if (paths == null || paths.isEmpty) return;
+        for (final path in paths) {
+          await _sendImageFile(path);
+        }
+      } else {
+        // 拍照 → 直接进编辑器 → 完成后发送
+        final file = await picker.pickImage(
+          source: source,
+          maxWidth: 2560,
+          maxHeight: 2560,
+          imageQuality: 80,
+        );
+        if (file == null || !mounted) return;
+        final editedBytes = await pushImageEditor(context, file.path);
+        if (editedBytes == null) return; // 关闭编辑器不保存
+        final path = await saveEditedImage(editedBytes);
+        await _sendImageFile(path);
+      }
     } catch (e) {
       if (mounted) _showSnack(ApiClient.errorMessage(e));
-      return;
     }
-    if (file == null) return;
+  }
 
-    // 校验大小（压缩后仍超服务器限制才拦截）
+  /// 发送一张本地图片文件（宽高解析 + 占位 + 上传 + 发送）。
+  Future<void> _sendImageFile(String path) async {
+    final file = File(path);
+
+    // 校验大小（编辑/压缩后仍超服务器限制才拦截）
     final length = await file.length();
     if (length > _serverMaxBytes) {
       if (mounted) {
