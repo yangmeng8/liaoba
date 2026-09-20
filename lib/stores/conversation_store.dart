@@ -93,6 +93,14 @@ class ConversationStore with ChangeNotifier {
       }
     } else if (n.contentType == ImSystemMessageType.friendDelete) {
       _privateMsgs.clear();
+    } else if (n.contentType == ImSystemMessageType.groupMsgDelete) {
+      // 群消息批量删除（2206）：按 payload.messageIds 批量移除缓存
+      final ids = (n.payload['messageIds'] as List?)
+              ?.map((e) => asInt(e))
+              .where((id) => id > 0)
+              .toSet() ??
+          const <int>{};
+      if (ids.isNotEmpty) _groupMsgs.removeWhere((m) => ids.contains(m.id));
     } else if (n.contentType == ImSystemMessageType.burnDelete) {
       // 阅后即焚销毁（2203）：服务端已删该消息，增量游标拉不到变化，
       // 按 payload.messageId 精确移除本地缓存（会话列表同步刷新）
@@ -112,6 +120,19 @@ class ConversationStore with ChangeNotifier {
       }
     }
     _scheduleReload();
+  }
+
+  /// 本地即时更新读位置（聊天室已读上报成功后调用）：
+  /// 直接写内存读位并重建会话——未读数立即清零，
+  /// 无需等 WS 推送或下次全量拉取（否则返回消息列表仍显示旧未读）。
+  void markReadLocally(
+      ImConversationType type, int targetId, int messageId) {
+    final key = '${type.value}_$targetId';
+    if ((_readPositions[key] ?? 0) >= messageId) return;
+    _readPositions[key] = messageId;
+    conversations = _rebuild(_privateMsgs, _groupMsgs, _channelMsgs,
+        AuthManager.instance.userId);
+    notifyListeners();
   }
 
   /// 推送触发的防抖补拉：窗口内多次通知合并为一次增量拉取。

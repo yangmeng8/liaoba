@@ -731,15 +731,32 @@ class ImApi {
     );
   }
 
-  /// 查询会话阅后即焚配置
+  /// 查询私聊会话阅后即焚配置
   /// （GET /app-api/im/conversation-setting/get?targetId=）。
-  /// 私聊传对方 userId；群聊传 groupId。未设置过时返回 null。
+  /// 未设置过时返回 null。
   static Future<({bool enabled, int duration})?> getBurnSetting(
       int targetId) async {
     final resp = await ApiClient.dio.get(
       '/app-api/im/conversation-setting/get',
       queryParameters: {'targetId': targetId},
     );
+    return _parseBurnResp(resp);
+  }
+
+  /// 查询群聊会话阅后即焚配置
+  /// （GET /app-api/im/conversation-setting/getGroup?targetId=）。
+  /// [targetId] 传群 ID；未设置过时返回 null。
+  static Future<({bool enabled, int duration})?> getGroupBurnSetting(
+      int targetId) async {
+    final resp = await ApiClient.dio.get(
+      '/app-api/im/conversation-setting/getGroup',
+      queryParameters: {'targetId': targetId},
+    );
+    return _parseBurnResp(resp);
+  }
+
+  /// 解析阅后即焚查询响应（get / getGroup 同构）。
+  static ({bool enabled, int duration})? _parseBurnResp(Response resp) {
     final data = ApiClient.unwrap(resp);
     if (data is! Map) return null;
     return (

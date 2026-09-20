@@ -192,6 +192,20 @@ class _ChatPageState extends State<ChatPage> {
       if (n.contentType == ChatMsgType.burnSettingChanged) {
         _insertBurnSettingNotice(n.payload);
       }
+      // 群消息批量删除（2206）：按 messageIds 精确移除本地消息，
+      // 随后防抖刷新补齐剩余变化
+      if (n.contentType == ImSystemMessageType.groupMsgDelete) {
+        final ids = (n.payload['messageIds'] as List?)
+                ?.map((e) => asInt(e))
+                .where((id) => id > 0)
+                .toSet() ??
+            const <int>{};
+        final had = _messages.any((m) => m.id != null && ids.contains(m.id));
+        if (had && mounted) {
+          setState(() => _messages
+              .removeWhere((m) => m.id != null && ids.contains(m.id)));
+        }
+      }
       // 防抖合并：短时间多条通知只刷新一次
       _wsRefreshTimer?.cancel();
       _wsRefreshTimer = Timer(_wsRefreshDebounce, _refreshLatest);
@@ -598,6 +612,28 @@ class _ChatPageState extends State<ChatPage> {
       'peerId',
     ]) {
       if (p.containsKey(key) && asInt(p[key]) == widget.targetId) return true;
+    }
+    // conversationId 兜底匹配（部分通知只有会话 ID 无独立 id 字段）：
+    // 私聊 private_{a}_{b}（两端任意序）；群聊 group_…_{groupId}
+    final cid = p['conversationId']?.toString() ?? '';
+    if (cid.isNotEmpty) {
+      final meStr = '${AuthManager.instance.userId ?? 0}';
+      final tStr = '${widget.targetId}';
+      if (widget.type == ImConversationType.private) {
+        final parts = cid.split('_');
+        if (parts.length == 3 &&
+            parts[0] == 'private' &&
+            parts.contains(meStr) &&
+            parts.contains(tStr)) {
+          return true;
+        }
+      } else if (widget.type == ImConversationType.group) {
+        if (cid.startsWith('group_') && cid.endsWith('_$tStr')) return true;
+        if (cid == 'group_$tStr') return true;
+      } else if (widget.type == ImConversationType.channel) {
+        if (cid.startsWith('channel_') && cid.endsWith('_$tStr')) return true;
+        if (cid == 'channel_$tStr') return true;
+      }
     }
     return false;
   }
@@ -1430,6 +1466,11 @@ class _ChatPageState extends State<ChatPage> {
     if (latestId == null || latestId <= _lastReportedReadId) return;
     _lastReportedReadId = latestId;
     final targetId = widget.targetId;
+    final type = _isPrivate
+        ? ImConversationType.private
+        : _isGroup
+            ? ImConversationType.group
+            : ImConversationType.channel;
     Future<void> req;
     if (_isPrivate) {
       req = ImApi.markPrivateRead(receiverId: targetId, messageId: latestId);
@@ -1438,7 +1479,11 @@ class _ChatPageState extends State<ChatPage> {
     } else {
       req = ImApi.markChannelRead(channelId: targetId, messageId: latestId);
     }
-    req.catchError((Object _) {}); // 上报失败静默，下次触发会重试
+    req.then((_) {
+      // 上报成功：本地即时清零会话未读（不等下次全量拉取）
+      ConversationStore.instance
+          .markReadLocally(type, targetId, latestId!);
+    }).catchError((Object _) {}); // 上报失败静默，下次触发会重试
   }
 
   /// 拉取对方已读位置（私聊「已读/未读」小字）。

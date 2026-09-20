@@ -288,6 +288,9 @@ class ImSystemMessageType {
   /// 阅后即焚：消息焚毁通知（消息到期销毁）。
   static const int burnDelete = 2203;
 
+  /// 群消息批量删除/撤回（2206，payload.messageIds 数组）。
+  static const int groupMsgDelete = 2206;
+
   /// 阅后即焚：设置变更通知（双方同步设置状态）。
   static const int burnSet = 2204;
 }

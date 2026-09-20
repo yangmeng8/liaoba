@@ -191,10 +191,10 @@ class _GroupSettingsPageState extends State<GroupSettingsPage> {
     }
   }
 
-  /// 静默拉阅后即焚配置（群聊 get 传 groupId；失败保持默认关）。
+  /// 静默拉阅后即焚配置（群聊专用 getGroup 接口；失败保持默认关）。
   Future<void> _loadBurnSetting() async {
     try {
-      final burn = await ImApi.getBurnSetting(widget.groupId);
+      final burn = await ImApi.getGroupBurnSetting(widget.groupId);
       if (burn != null && mounted) {
         setState(() {
           _burnEnabled = burn.enabled;
