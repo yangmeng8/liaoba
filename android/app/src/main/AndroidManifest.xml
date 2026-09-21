@@ -10,7 +10,7 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
     <!-- 后端图片/文件 URL 若为 http 明文，Android 9+ release 默认拒绝加载，放行保证测试环境可用 -->
     <application
-        android:label="liaoba"
+        android:label="IM"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true">

@@ -267,6 +267,11 @@ class _FriendRequestTabState extends State<_FriendRequestTab>
 
   /// 本地改写处理状态（不重拉列表，对齐 H5 乐观更新）。
   void _markHandled(int id, int result) {
+    // 通过即成为好友：申请项从列表移除（不再展示）
+    if (result == 1) {
+      _list.removeWhere((e) => e.id == id);
+      return;
+    }
     final i = _list.indexWhere((e) => e.id == id);
     if (i < 0) return;
     final old = _list[i];
