@@ -36,6 +36,9 @@ class _RtcCallPageState extends State<RtcCallPage> {
   /// 扬声器开关（语音通话听筒/外放；视频通话默认外放）。
   bool _speakerOn = false;
 
+  /// 私聊视频小窗互换（点击右上小窗切换主副画面）。
+  bool _pipSwapped = false;
+
   /// RUNNING 音频路由初始化标记（语音→听筒，视频→扬声器）。
   bool _audioRouteReady = false;
 
@@ -399,6 +402,15 @@ class _RtcCallPageState extends State<RtcCallPage> {
             ),
           );
         }
+        // 私聊视频：微信式布局（对方全屏 + 自己右上角小窗）
+        if (_ctrl.isVideo && list.length == 2) {
+          final myId = AuthManager.instance.userId ?? 0;
+          final local =
+              list.firstWhere((p) => p.userId == myId, orElse: () => list.first);
+          final remote =
+              list.firstWhere((p) => p.userId != myId, orElse: () => list.last);
+          return _buildDuoVideo(local, remote);
+        }
         if (list.length == 1) {
           return Padding(
             padding: const EdgeInsets.all(12),
@@ -417,23 +429,61 @@ class _RtcCallPageState extends State<RtcCallPage> {
     );
   }
 
+  /// 私聊视频（微信式）：对方全屏 + 自己右上角小窗；
+  /// 点击小窗切换主副画面。
+  Widget _buildDuoVideo(RtcParticipant local, RtcParticipant remote) {
+    final main = _pipSwapped ? local : remote;
+    final pip = _pipSwapped ? remote : local;
+    final screenWidth = MediaQuery.of(context).size.width;
+    final pipWidth = screenWidth * 0.28;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        // 主画面：铺满（直角、带底部昵称/静音标签）
+        _buildTile(main, fullscreen: true),
+        // 右上角小窗：点击切换主副
+        Positioned(
+          top: 10,
+          right: 12,
+          child: GestureDetector(
+            onTap: () => setState(() => _pipSwapped = !_pipSwapped),
+            child: Container(
+              width: pipWidth,
+              height: pipWidth / 0.75, // 3:4 竖屏摄像头比例
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.black45, width: 1),
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: _buildTile(pip, showLabel: false),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   /// 单个参与者格子：视频轨在线 → VideoTrackRenderer；
   /// 否则头像兜底（语音通话/对方关摄像头）。角标：昵称 + 静音标记。
-  Widget _buildTile(RtcParticipant p) {
+  Widget _buildTile(RtcParticipant p,
+      {bool fullscreen = false, bool showLabel = true}) {
     final hasVideo = _ctrl.isVideo && !p.cameraMuted && p.cameraRenderer != null;
     final name = _nameOf(p);
     return ClipRRect(
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(fullscreen ? 0 : 12),
       child: Stack(
         fit: StackFit.expand,
         children: [
           if (hasVideo) p.cameraRenderer! else _buildTilePlaceholder(p),
           // 底部标签：静音图标 + 昵称
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: Container(
+          if (showLabel)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
               color: Colors.black38,
               child: Row(
