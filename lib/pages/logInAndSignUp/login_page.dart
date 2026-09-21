@@ -168,29 +168,18 @@ class _LoginPageState extends State<LoginPage>
             children: [
               const SizedBox(height: 60),
 
-              // Logo + 聊吧 标题
-              Container(
-                width: 90,
-                height: 90,
-                decoration: const BoxDecoration(
-                  color: AppColors.lime,
-                  shape: BoxShape.circle,
-                ),
-                child: const Center(
-                  child: Text(
-                    '聊吧',
-                    style: TextStyle(
-                      fontSize: 38,
-                      fontWeight: FontWeight.w800,
-                      color: Colors.black,
-                      fontFamily: 'PingFang SC',
-                    ),
-                  ),
+              // Logo（assets/icon.png 圆形裁剪）
+              ClipOval(
+                child: Image.asset(
+                  'assets/icon.png',
+                  width: 90,
+                  height: 90,
+                  fit: BoxFit.cover,
                 ),
               ),
               const SizedBox(height: 20),
               Text(
-                '聊吧',
+                'IM',
                 style: TextStyle(
                   fontSize: 36,
                   fontWeight: FontWeight.w800,
@@ -299,7 +288,7 @@ class _LoginPageState extends State<LoginPage>
       children: [
         _InputBox(
           controller: _passwordAccountController,
-          hint: '请输入您的手机号码/聊吧号',
+          hint: '请输入您的手机号码/IM号',
           colors: colors,
         ),
         const SizedBox(height: 16),

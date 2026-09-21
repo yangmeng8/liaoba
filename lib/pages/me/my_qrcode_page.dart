@@ -5,8 +5,8 @@ import 'package:qr_flutter/qr_flutter.dart';
 class MyQrcodePage extends StatelessWidget {
   const MyQrcodePage({super.key});
 
-  // 二维码中编码的内容（前缀+聊吧号，实际应读取当前用户 id）
-  static const _qrData = 'LIAOBA:97160mek';
+  // 二维码中编码的内容（前缀+IM号，实际应读取当前用户 id）
+  static const _qrData = 'IM:97160mek';
   static const _nickname = '李猛';
 
   void _toast(BuildContext context, String msg) => ScaffoldMessenger.of(context)
@@ -167,7 +167,7 @@ class MyQrcodePage extends StatelessWidget {
               ),
               const SizedBox(height: 10),
               const Text(
-                '打开聊吧 APP，扫码加我为好友',
+                '打开IM APP，扫码加我为好友',
                 style: TextStyle(
                   fontSize: 15,
                   color: Color(0xFF666666),

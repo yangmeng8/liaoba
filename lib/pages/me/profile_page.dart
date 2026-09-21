@@ -190,7 +190,7 @@ class _ProfilePageState extends State<ProfilePage> {
             ),
           ),
 
-          // 资料项：头像 / 昵称 / 聊吧号 / 手机 / 二维码 / 签名
+          // 资料项：头像 / 昵称 / IM号 / 手机 / 二维码 / 签名
           Expanded(
             child: ListView(
               padding: const EdgeInsets.only(top: 12),
@@ -232,7 +232,7 @@ class _ProfilePageState extends State<ProfilePage> {
                         onTap: _onNicknameTap,
                       ),
                       _ProfileRow(
-                        title: '聊吧号',
+                        title: 'IM号',
                         colors: colors,
                         showDivider: true,
                         trailing: Text(liaoBaId,

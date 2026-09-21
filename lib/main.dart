@@ -47,7 +47,7 @@ class LiaobaApp extends StatelessWidget {
         ]),
         builder: (context, _) => MaterialApp(
           debugShowCheckedModeBanner: false,
-          title: '聊吧',
+          title: 'IM',
           navigatorKey: _rootNavigatorKey,
           theme: AppTheme.lightTheme,
           darkTheme: AppTheme.darkTheme,

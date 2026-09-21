@@ -16,14 +16,15 @@ const List<(String, int)> _burnPresets = [
   ('30秒', 30),
 ];
 
-/// 自定义单位（秒数；左侧数字范围：秒/分钟/小时 1-59、天 1-6、周 1-4）。
+/// 自定义单位（秒数；左侧数字范围：秒/分钟 1-59、小时 1-23、天 1-6、周 1-4）。
 const List<int> _burnUnitSeconds = [1, 60, 3600, 86400, 604800];
 const List<String> _burnUnitLabels = ['秒', '分钟', '小时', '天', '周'];
 
 bool _isPresetDuration(int d) => _burnPresets.any((p) => p.$2 == d);
 
-/// 单位对应的数字上限：秒/分钟/小时 1-59、天 1-6、周 1-4。
+/// 单位对应的数字上限：秒/分钟 1-59、小时 1-23、天 1-6、周 1-4。
 int _maxNumberOfUnit(int unitIdx) => switch (unitIdx) {
+      2 => 23, // 小时
       3 => 6, // 天
       4 => 4, // 周
       _ => 59,
@@ -134,7 +135,7 @@ class _BurnOptionRow extends StatelessWidget {
   }
 }
 
-/// 二级弹框：自定义时间（左数字 1-59 / 右单位；天 1-6、周 1-4，单位默认秒）。
+/// 二级弹框：自定义时间（左数字 1-59 / 右单位；小时 1-23、天 1-6、周 1-4，单位默认秒）。
 Future<void> _showCustomBurnSheet(
   BuildContext context, {
   required int currentDuration,
@@ -180,7 +181,7 @@ Future<void> _showCustomBurnSheet(
               height: 200,
               child: Row(
                 children: [
-                  // 左：数字（1-59；天 1-6、周 1-4 随单位联动）
+                  // 左：数字（秒/分钟 1-59、小时 1-23、天 1-6、周 1-4 随单位联动）
                   Expanded(
                     child: CupertinoPicker(
                       scrollController: numCtrl,

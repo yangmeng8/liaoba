@@ -182,7 +182,7 @@ class _RegisterPageState extends State<RegisterPage> {
                   padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
                   children: [
                     Text(
-                      '欢迎使用聊吧',
+                      '欢迎使用IM',
                       style: TextStyle(
                         fontSize: 30,
                         fontWeight: FontWeight.w700,

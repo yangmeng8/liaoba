@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
-import '../../../shared/app_colors.dart';
 import '../../../shared/app_theme.dart';
 
 /// 关于我们 / 版本信息页面。
@@ -77,30 +76,20 @@ class _AboutPageState extends State<AboutPage> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Logo（绿色圆形背景 + "聊吧"文字占位）
-                    Container(
-                      width: 120,
-                      height: 120,
-                      decoration: const BoxDecoration(
-                        color: AppColors.lime,
-                        shape: BoxShape.circle,
-                      ),
-                      // TODO: 替换为真实 App Logo
-                      child: const Center(
-                        child: Text(
-                          '聊吧',
-                          style: TextStyle(
-                            fontSize: 32,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
+                    // Logo（assets/icon.png 圆形裁剪）
+                    ClipOval(
+                      child: Image.asset(
+                        'assets/icon.png',
+                        width: 120,
+                        height: 120,
+                        fit: BoxFit.cover,
                       ),
                     ),
                     const SizedBox(height: 24),
 
                     // App 名称
                     Text(
-                      '聊吧',
+                      'IM',
                       style: TextStyle(
                         fontSize: 24,
                         fontWeight: FontWeight.w600,

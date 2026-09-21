@@ -4,8 +4,8 @@
 <dict>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
-    <key>CFBundleDevelopmentRegion</key>
-    <string>zh_CN</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>zh_CN</string>
 	<key>CFBundleDisplayName</key>
 	<string>IM</string>
 	<key>CFBundleExecutable</key>
