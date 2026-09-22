@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../models/im_conversation.dart';
-import '../../services/auth_manager.dart';
 import '../../services/im_api.dart';
 import '../../services/im_websocket.dart';
 import '../../shared/app_colors.dart';
@@ -11,6 +10,7 @@ import '../../shared/app_theme.dart';
 import '../../shared/im_avatar.dart';
 import '../../shared/widgets.dart';
 import '../../stores/presence_store.dart';
+import '../../stores/request_badge_store.dart';
 import 'create_group_page.dart';
 import 'friend_apply_page.dart';
 import 'friend_buckets.dart';
@@ -36,9 +36,6 @@ class _ContactsPageState extends State<ContactsPage> {
   List<ImFriend> _friends = [];
   bool _loading = true;
 
-  /// 「新的朋友」待办角标：收到的未处理好友申请数。
-  int _pendingRequests = 0;
-
   /// 分组头锚点（索引条点击滚动定位用）。
   final Map<String, BuildContext> _bucketContexts = {};
 
@@ -63,12 +60,20 @@ class _ContactsPageState extends State<ContactsPage> {
     _presenceSub = PresenceStore.instance.changes.listen((_) {
       if (mounted) setState(() {});
     });
+    // 待办角标数据源（共享 store：主框架通讯录 Tab 角标同源）
+    RequestBadgeStore.instance.addListener(_onBadgeChanged);
+  }
+
+  /// 待办角标变化 → 刷新「新的朋友」行角标。
+  void _onBadgeChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
     _wsSub?.cancel();
     _presenceSub?.cancel();
+    RequestBadgeStore.instance.removeListener(_onBadgeChanged);
     _wsDebounce?.cancel();
     _searchCtrl.dispose();
     _scrollCtrl.dispose();
@@ -77,7 +82,6 @@ class _ContactsPageState extends State<ContactsPage> {
 
   Future<void> _load() async {
     setState(() => _loading = true);
-    _loadPendingRequests();
     try {
       final friends = await ImApi.getFriendList();
       if (!mounted) return;
@@ -86,23 +90,6 @@ class _ContactsPageState extends State<ContactsPage> {
       // 失败保留旧数据；空数据时展示空态
     } finally {
       if (mounted) setState(() => _loading = false);
-    }
-  }
-
-  /// 待办角标：收到的（toUserId=我）且未处理的好友申请数。
-  /// 失败静默（角标不影响列表展示），与请求中心同 limit=50。
-  Future<void> _loadPendingRequests() async {
-    try {
-      final list = await ImApi.getFriendRequestList(limit: 50);
-      if (!mounted) return;
-      final myUserId = AuthManager.instance.userId ?? 0;
-      setState(() {
-        _pendingRequests = list
-            .where((r) => r.toUserId == myUserId && r.handleResult == 0)
-            .length;
-      });
-    } catch (_) {
-      // 静默：保留旧计数
     }
   }
 
@@ -259,14 +246,14 @@ class _ContactsPageState extends State<ContactsPage> {
                   _EntryTile(
                     icon: Icons.person_add_alt_1_outlined,
                     title: '新的朋友',
-                    badge: _pendingRequests,
+                    badge: RequestBadgeStore.instance.pending,
                     onTap: () async {
                       await Navigator.of(context).push(
                         MaterialPageRoute(
                             builder: (_) => const RequestCenterPage()),
                       );
                       // 请求中心里同意/拒绝后返回，刷新待办角标
-                      _loadPendingRequests();
+                      RequestBadgeStore.instance.refresh();
                     },
                   ),
                   Divider(height: 1, indent: 78, color: colors.divider),

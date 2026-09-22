@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'pages/contacts/contacts_page.dart';
+import 'stores/conversation_store.dart';
 import 'stores/presence_store.dart';
+import 'stores/request_badge_store.dart';
 import 'pages/logInAndSignUp/login_page.dart';
 import 'pages/me/me_page.dart';
 import 'pages/messages/messages_page.dart';
@@ -123,6 +125,32 @@ class _HomeShellState extends State<HomeShell> {
     PresenceStore.instance.attach();
     // 进入主框架（登录后）启动 IM 长连接，跨页面复用单条连接
     ImWebSocket.instance.ensure();
+    // 待办角标：进入主框架拉一次（账号切换后重置上个账号的旧值）
+    RequestBadgeStore.instance.refresh();
+  }
+
+  /// 消息 Tab 未读总数（所有会话未读之和）。
+  int get _totalUnread => ConversationStore.instance.conversations
+      .fold<int>(0, (sum, c) => sum + c.unreadCount);
+
+  /// Tab 图标右上角红色数字角标（微信风格，溢出图标边界显示）。
+  Widget _withBadge(Widget icon, int count) {
+    if (count <= 0) return icon;
+    return SizedBox(
+      width: 24,
+      height: 24,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Center(child: icon),
+          Positioned(
+            top: -7,
+            right: -10,
+            child: _TabBadge(count: count),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -135,39 +163,96 @@ class _HomeShellState extends State<HomeShell> {
     final selectedIconColor = AppColors.lime;
     final selectedLabelColor = isDark ? AppColors.lime : colors.text;
     final unselectedColor = colors.muted;
+    // 角标数据源：会话未读（store 补拉/已读本地清零等 notify）
+    // + 好友申请待办数（共享 store，通讯录页与请求中心同源）
+    final totalUnread = _totalUnread;
+    final pendingRequests = RequestBadgeStore.instance.pending;
     return Scaffold(
       body: IndexedStack(index: index, children: pages),
-      bottomNavigationBar: NavigationBar(
-        height: 62,
-        backgroundColor: tabBarBg,
-        elevation: 0,
-        selectedIndex: index,
-        onDestinationSelected: (i) => setState(() => index = i),
-        indicatorColor: Colors.transparent,
-        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-        labelTextStyle: WidgetStateProperty.resolveWith((states) {
-          if (states.contains(WidgetState.selected)) {
-            return TextStyle(color: selectedLabelColor);
-          }
-          return TextStyle(color: unselectedColor);
-        }),
-        destinations: [
-          NavigationDestination(
-            icon: Icon(Icons.chat_bubble_outline, color: unselectedColor),
-            selectedIcon: Icon(Icons.chat_bubble, color: selectedIconColor),
-            label: '消息',
+      bottomNavigationBar: ListenableBuilder(
+        listenable: Listenable.merge([
+          ConversationStore.instance,
+          RequestBadgeStore.instance,
+        ]),
+        builder: (context, _) => NavigationBar(
+          height: 62,
+          backgroundColor: tabBarBg,
+          elevation: 0,
+          selectedIndex: index,
+          onDestinationSelected: (i) => setState(() => index = i),
+          indicatorColor: Colors.transparent,
+          labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+          labelTextStyle: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.selected)) {
+              return TextStyle(color: selectedLabelColor);
+            }
+            return TextStyle(color: unselectedColor);
+          }),
+          destinations: [
+            NavigationDestination(
+              icon: _withBadge(
+                  Icon(Icons.chat_bubble_outline, color: unselectedColor),
+                  totalUnread),
+              selectedIcon: _withBadge(
+                  Icon(Icons.chat_bubble, color: selectedIconColor),
+                  totalUnread),
+              label: '消息',
+            ),
+            NavigationDestination(
+              icon: _withBadge(
+                  Icon(Icons.person_outline, color: unselectedColor),
+                  pendingRequests),
+              selectedIcon: _withBadge(
+                  Icon(Icons.person, color: selectedIconColor),
+                  pendingRequests),
+              label: '通讯录',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.account_circle_outlined, color: unselectedColor),
+              selectedIcon: Icon(Icons.account_circle, color: selectedIconColor),
+              label: '我的',
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Tab 数字角标：正圆红底白字（宽高一致保证圆形；
+/// 位数越多圆越大，>99 显示 99+；文字超宽自动缩放防溢出）。
+class _TabBadge extends StatelessWidget {
+  final int count;
+
+  const _TabBadge({required this.count});
+
+  @override
+  Widget build(BuildContext context) {
+    final text = count > 99 ? '99+' : '$count';
+    final size = text.length == 1
+        ? 16.0
+        : text.length == 2
+            ? 18.0
+            : 21.0;
+    return Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: const BoxDecoration(
+        color: Color(0xFFFA5151),
+        shape: BoxShape.circle,
+      ),
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Text(
+          text,
+          maxLines: 1,
+          style: const TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+            color: Colors.white,
           ),
-          NavigationDestination(
-            icon: Icon(Icons.person_outline, color: unselectedColor),
-            selectedIcon: Icon(Icons.person, color: selectedIconColor),
-            label: '通讯录',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.account_circle_outlined, color: unselectedColor),
-            selectedIcon: Icon(Icons.account_circle, color: selectedIconColor),
-            label: '我的',
-          ),
-        ],
+        ),
       ),
     );
   }
