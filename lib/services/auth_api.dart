@@ -9,6 +9,9 @@ class SmsScene {
   /// 用户(手机)登录/注册
   static const int memberLogin = 1;
 
+  /// 修改手机号（验证码发到新手机号）
+  static const int updateMobile = 2;
+
   /// 重置密码
   static const int resetPassword = 4;
 }
@@ -16,7 +19,7 @@ class SmsScene {
 /// 会员认证相关接口。
 class AuthApi {
   /// 发送手机短信验证码。
-  /// [scene] 对应后端 SmsSceneEnum：1=用户(手机)登录/注册。
+  /// [scene] 对应后端 SmsSceneEnum：1=登录/注册、2=修改手机号、4=重置密码。
   /// [tenantId]：注册流程传 0（后端要求），登录/忘记密码默认租户 1。
   static Future<bool> sendSmsCode({
     required String mobile,
@@ -32,6 +35,19 @@ class AuthApi {
     );
     final data = ApiClient.unwrap(resp);
     return data == true;
+  }
+
+  /// 修改绑定手机号（已登录）。
+  /// [mobile] 新手机号；[code] 新手机号收到的验证码
+  /// （发送用 [sendSmsCode] scene=2）。成功后由调用方更新本地缓存。
+  static Future<void> updateMobile({
+    required String mobile,
+    required String code,
+  }) async {
+    await ApiClient.dio.put(
+      '/app-api/member/user/update-mobile',
+      data: {'mobile': mobile, 'code': code},
+    );
   }
 
   /// 手机 + 验证码 + 密码注册。

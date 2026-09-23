@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../services/auth_api.dart';
@@ -28,6 +30,9 @@ class _ProfilePageState extends State<ProfilePage> {
   /// 当前个性签名。
   String _signature = '';
 
+  /// 用户资料变化订阅（改绑手机号等变更即时刷新显示）。
+  StreamSubscription<void>? _profileSub;
+
   final _picker = ImagePicker();
 
   @override
@@ -44,6 +49,16 @@ class _ProfilePageState extends State<ProfilePage> {
         if (n.isNotEmpty) _nickname = n;
       });
     }).catchError((_) {});
+    // 改绑手机号等资料变更：立即重建显示新值
+    _profileSub = AuthManager.instance.changes.listen((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _profileSub?.cancel();
+    super.dispose();
   }
 
   void _toast(String msg) =>

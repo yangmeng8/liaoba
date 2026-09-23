@@ -2,6 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../../../services/api_client.dart';
+import '../../../../services/auth_api.dart';
+import '../../../../services/auth_manager.dart';
 import '../../../../shared/app_colors.dart';
 import '../../../../shared/app_theme.dart';
 
@@ -20,7 +23,17 @@ class _ChangeBoundPhonePageState extends State<ChangeBoundPhonePage> {
   Timer? _countdownTimer;
   int _countdown = 0;
 
-  static const _boundPhone = '185****4829';
+  /// 提交中防连点。
+  bool _submitting = false;
+
+  /// 当前绑定手机号（登录缓存真实号码）：185****4829（不足 11 位原样，空显示 -）。
+  String get _boundPhone {
+    final mobile = AuthManager.instance.mobile ?? '';
+    if (mobile.length < 11) {
+      return mobile.isEmpty ? '-' : mobile;
+    }
+    return '${mobile.substring(0, 3)}****${mobile.substring(7)}';
+  }
 
   @override
   void dispose() {
@@ -50,18 +63,28 @@ class _ChangeBoundPhonePageState extends State<ChangeBoundPhonePage> {
     return RegExp(r'^1[3-9]\d{9}$').hasMatch(phone);
   }
 
-  void _onGetCode() {
+  Future<void> _onGetCode() async {
     if (_isCounting) return;
     if (!_isPhoneValid) {
       _showToast('请输入正确的新手机号');
       return;
     }
-    // TODO: 调用发送短信验证码接口（入参 phone = 新手机号）
-    _showToast('验证码已发送');
-    _startCountdown();
+    // 验证码发到新手机号（scene=2 修改手机号，须与 update-mobile 校验一致）
+    try {
+      final ok = await AuthApi.sendSmsCode(
+        mobile: _phoneController.text.trim(),
+        scene: SmsScene.updateMobile,
+      );
+      if (!mounted) return;
+      _showToast(ok ? '验证码已发送' : '验证码发送失败，请稍后重试');
+      if (ok) _startCountdown();
+    } catch (e) {
+      if (mounted) _showToast('验证码发送失败：${ApiClient.errorMessage(e)}');
+    }
   }
 
-  void _submit() {
+  Future<void> _submit() async {
+    if (_submitting) return;
     final phone = _phoneController.text.trim();
     final code = _codeController.text.trim();
 
@@ -73,9 +96,21 @@ class _ChangeBoundPhonePageState extends State<ChangeBoundPhonePage> {
       _showToast('请输入正确的手机号');
       return;
     }
-    // TODO: 调用修改绑定手机号接口
-    _showToast('绑定成功');
-    Navigator.of(context).popUntil((route) => route.isFirst);
+    setState(() => _submitting = true);
+    try {
+      await AuthApi.updateMobile(mobile: phone, code: code);
+      // 更新本地缓存（账号安全页等显示处同步）
+      await AuthManager.instance.updateMobile(phone);
+      if (!mounted) return;
+      _showToast('绑定成功');
+      // 返回上一页（账号安全页），入口手机号显示随即刷新
+      Navigator.of(context).pop();
+    } catch (e) {
+      if (mounted) {
+        setState(() => _submitting = false);
+        _showToast('修改失败：${ApiClient.errorMessage(e)}');
+      }
+    }
   }
 
   void _showToast(String msg) {

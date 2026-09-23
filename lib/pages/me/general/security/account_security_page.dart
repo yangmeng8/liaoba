@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../../../services/auth_api.dart';
@@ -15,6 +17,9 @@ class AccountSecurityPage extends StatefulWidget {
 }
 
 class _AccountSecurityPageState extends State<AccountSecurityPage> {
+  /// 用户资料变化订阅（改绑手机号成功后即时刷新显示，无需依赖返回时的 rebuild）。
+  StreamSubscription<void>? _profileSub;
+
   @override
   void initState() {
     super.initState();
@@ -24,6 +29,16 @@ class _AccountSecurityPageState extends State<AccountSecurityPage> {
         if (mounted) setState(() {});
       }).catchError((Object _) {});
     }
+    // 改绑手机号等资料变更：立即重建显示新值
+    _profileSub = AuthManager.instance.changes.listen((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _profileSub?.cancel();
+    super.dispose();
   }
 
   /// 手机号打码：185****4829（不足 11 位原样显示）。

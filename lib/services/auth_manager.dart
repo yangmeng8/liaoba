@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -13,6 +15,16 @@ class AuthManager {
 
   /// 全局导航 Key（main.dart 注入），401 时用于从任意页面跳回登录页。
   GlobalKey<NavigatorState>? rootNavigatorKey;
+
+  /// 用户资料变化广播（昵称/头像/手机号更新、登录/退出），
+  /// 显示层订阅即时刷新（如改绑手机号后各返回页同步显示新号）。
+  final _changesCtrl = StreamController<void>.broadcast();
+
+  Stream<void> get changes => _changesCtrl.stream;
+
+  void _emitChange() {
+    if (!_changesCtrl.isClosed) _changesCtrl.add(null);
+  }
 
   /// 401 跳转去重：并发请求同时 401 时只 push 一次登录页。
   bool _redirectingToLogin = false;
@@ -65,6 +77,15 @@ class AuthManager {
     await prefs.setString(_kNickname, nickname);
     await prefs.setString(_kAvatar, avatar);
     if (mobile != null) await prefs.setString(_kMobile, mobile);
+    _emitChange();
+  }
+
+  /// 更新绑定手机号（修改绑定手机号成功后调用，仅更新本地缓存）。
+  Future<void> updateMobile(String mobile) async {
+    this.mobile = mobile;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kMobile, mobile);
+    _emitChange();
   }
 
   /// 注册/登录成功后保存。
@@ -132,5 +153,6 @@ class AuthManager {
         .then((_) => prefs.remove(_kNickname))
         .then((_) => prefs.remove(_kAvatar))
         .then((_) => prefs.remove(_kMobile));
+    _emitChange();
   }
 }
