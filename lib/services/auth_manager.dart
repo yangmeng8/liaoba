@@ -37,6 +37,7 @@ class AuthManager {
   static const _kNickname = 'auth.nickname';
   static const _kAvatar = 'auth.avatar';
   static const _kMobile = 'auth.mobile';
+  static const _kImCode = 'auth.im_code';
 
   int? userId;
   String? accessToken;
@@ -44,10 +45,13 @@ class AuthManager {
   String? expiresTime;
   String? openid;
 
-  /// 登录用户昵称/头像/手机号（来自 /member/user/get，null=未加载）。
+  /// 登录用户昵称/头像/手机号/IM号（来自 /member/user/get，null=未加载）。
   String? nickname;
   String? avatar;
   String? mobile;
+
+  /// IM 号（member/user/get 的 code 字段，用户唯一业务号）。
+  String? imCode;
 
   bool get isLoggedIn => accessToken != null && accessToken!.isNotEmpty;
 
@@ -62,21 +66,25 @@ class AuthManager {
     nickname = prefs.getString(_kNickname);
     avatar = prefs.getString(_kAvatar);
     mobile = prefs.getString(_kMobile);
+    imCode = prefs.getString(_kImCode);
   }
 
-  /// 更新登录用户资料（昵称/头像/手机号，来自用户中心接口）。
+  /// 更新登录用户资料（昵称/头像/手机号/IM号，来自用户中心接口）。
   Future<void> updateProfile({
     required String nickname,
     required String avatar,
     String? mobile,
+    String? imCode,
   }) async {
     this.nickname = nickname;
     this.avatar = avatar;
     if (mobile != null) this.mobile = mobile;
+    if (imCode != null) this.imCode = imCode;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_kNickname, nickname);
     await prefs.setString(_kAvatar, avatar);
     if (mobile != null) await prefs.setString(_kMobile, mobile);
+    if (imCode != null) await prefs.setString(_kImCode, imCode);
     _emitChange();
   }
 
@@ -142,6 +150,7 @@ class AuthManager {
     nickname = null;
     avatar = null;
     mobile = null;
+    imCode = null;
 
     final prefs = await SharedPreferences.getInstance();
     await prefs
@@ -152,7 +161,8 @@ class AuthManager {
         .then((_) => prefs.remove(_kOpenid))
         .then((_) => prefs.remove(_kNickname))
         .then((_) => prefs.remove(_kAvatar))
-        .then((_) => prefs.remove(_kMobile));
+        .then((_) => prefs.remove(_kMobile))
+        .then((_) => prefs.remove(_kImCode));
     _emitChange();
   }
 }

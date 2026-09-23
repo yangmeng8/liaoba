@@ -1,13 +1,43 @@
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import '../../services/auth_api.dart';
+import '../../services/auth_manager.dart';
+import '../../shared/im_avatar.dart';
+
 /// 我的二维码页面。
-class MyQrcodePage extends StatelessWidget {
+class MyQrcodePage extends StatefulWidget {
   const MyQrcodePage({super.key});
 
-  // 二维码中编码的内容（前缀+IM号，实际应读取当前用户 id）
-  static const _qrData = 'IM:97160mek';
-  static const _nickname = '李猛';
+  @override
+  State<MyQrcodePage> createState() => _MyQrcodePageState();
+}
+
+class _MyQrcodePageState extends State<MyQrcodePage> {
+  @override
+  void initState() {
+    super.initState();
+    // 缓存缺 IM号/昵称时静默刷新（member/user/get）
+    final auth = AuthManager.instance;
+    if ((auth.imCode ?? '').isEmpty || (auth.nickname ?? '').isEmpty) {
+      AuthApi.loadUserProfile().then((_) {
+        if (mounted) setState(() {});
+      }).catchError((Object _) {});
+    }
+  }
+
+  /// 二维码内容：IM号前缀 + 登录用户真实 IM号
+  /// （member/user/get 的 code 字段；缺省兜底 userId）。
+  String get _qrData {
+    final code = (AuthManager.instance.imCode ?? '').trim();
+    return 'IM:${code.isEmpty ? (AuthManager.instance.userId ?? 0) : code}';
+  }
+
+  /// 登录用户昵称（真实数据，空显示占位）。
+  String get _nickname =>
+      (AuthManager.instance.nickname ?? '').trim().isEmpty
+          ? '我'
+          : (AuthManager.instance.nickname ?? '').trim();
 
   void _toast(BuildContext context, String msg) => ScaffoldMessenger.of(context)
       .showSnackBar(SnackBar(content: Text(msg)));
@@ -157,9 +187,9 @@ class MyQrcodePage extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 10),
-              const Text(
+              Text(
                 _nickname,
-                style: TextStyle(
+                style: const TextStyle(
                   fontSize: 20,
                   fontWeight: FontWeight.w500,
                   color: Colors.black87,
@@ -204,21 +234,11 @@ class MyQrcodePage extends StatelessWidget {
         ),
       );
 
-  /// 渐变圆形头像（与个人资料页保持一致）。
-  Widget get _avatar => Container(
-        decoration: const BoxDecoration(
-          shape: BoxShape.circle,
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [Color(0xFFBDE7FF), Color(0xFF93D5C3)],
-          ),
-        ),
-        child: const Icon(
-          Icons.person,
-          color: Color(0xFF304B73),
-          size: 36,
-        ),
+  /// 中心头像：登录用户网络头像（ImAvatar 带字母色卡兜底）。
+  Widget get _avatar => ImAvatar(
+        src: AuthManager.instance.avatar ?? '',
+        name: _nickname,
+        size: 52,
       );
 }
 

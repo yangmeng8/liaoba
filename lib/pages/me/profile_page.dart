@@ -164,9 +164,9 @@ class _ProfilePageState extends State<ProfilePage> {
   Widget build(BuildContext context) {
     final colors = context.colors;
 
-    // 登录用户资料：手机号/用户编号（接口有则显示，无则占位）
+    // 登录用户资料：手机号/IM号（接口有则显示，无则占位）
     final phone = (AuthManager.instance.mobile ?? '').trim();
-    final liaoBaId = AuthManager.instance.userId?.toString() ?? '-';
+    final imCode = (AuthManager.instance.imCode ?? '').trim();
 
     return Scaffold(
       backgroundColor: colors.bg,
@@ -250,7 +250,7 @@ class _ProfilePageState extends State<ProfilePage> {
                         title: 'IM号',
                         colors: colors,
                         showDivider: true,
-                        trailing: Text(liaoBaId,
+                        trailing: Text(imCode.isEmpty ? '-' : imCode,
                             style: TextStyle(
                                 fontSize: 16, color: colors.muted)),
                       ),

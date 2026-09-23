@@ -158,6 +158,7 @@ class AuthApi {
         nickname: (data['nickname'] ?? '').toString(),
         avatar: (data['avatar'] ?? '').toString(),
         mobile: (data['mobile'] ?? '').toString(),
+        imCode: (data['code'] ?? '').toString(),
       );
     }
   }
