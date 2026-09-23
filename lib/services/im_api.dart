@@ -343,6 +343,22 @@ class ImApi {
     ApiClient.unwrap(resp);
   }
 
+  /// 单向删除会话（仅自己）：服务端标记该会话 userDeleted=1，
+  /// 冷启动 list 快照不再返回；对方不受影响。
+  static Future<void> deleteConversationRead({
+    required ImConversationType conversationType,
+    required int targetId,
+  }) async {
+    final resp = await ApiClient.dio.get(
+      '/app-api/im/conversation-read/delete',
+      queryParameters: {
+        'conversationType': conversationType.value,
+        'targetId': targetId,
+      },
+    );
+    ApiClient.unwrap(resp);
+  }
+
   /// 拉取当前用户的会话列表快照（冷启动/下拉刷新/切账号用）。
   /// 服务端已按置顶优先排序、已过滤用户删除的会话（userDeleted=1）。
   static Future<List<ImConversationRead>> getConversationReadList({

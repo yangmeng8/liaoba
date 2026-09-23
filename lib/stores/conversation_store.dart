@@ -370,6 +370,23 @@ class ConversationStore with ChangeNotifier {
     notifyListeners();
   }
 
+  /// 单向删除会话（仅自己）：调服务端 delete 接口标记 userDeleted=1，
+  /// 本地即时隐藏 + 清该会话消息缓存（防后续新消息到来时旧消息重显）；
+  /// 失败抛异常由调用方提示。新消息到达服务端重置 userDeleted 后，
+  /// pull 增量会自动恢复会话显示。
+  Future<void> deleteConversation(ImConversationType type, int targetId) async {
+    await ImApi.deleteConversationRead(
+      conversationType: type,
+      targetId: targetId,
+    );
+    final key = '${type.value}_$targetId';
+    _deletedKeys.add(key);
+    _dropMessagesOf(type, targetId);
+    conversations = _rebuild(_privateMsgs, _groupMsgs, _channelMsgs,
+        AuthManager.instance.userId);
+    notifyListeners();
+  }
+
   /// 循环拉取私聊消息（minId 游标，升序；缓存非空时仅拉新增）。
   Future<List<ImPrivateMessage>> _pullAllPrivate() async {
     final all = <ImPrivateMessage>[];

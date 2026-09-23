@@ -35,6 +35,7 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
   image_picker: ^1.1.2
+  flutter_slidable: ^3.1.2  # 会话列表左滑操作（删除按钮，微信风格）
   pro_image_editor: ^11.18.3  # 图片编辑器（涂鸦/文字/裁剪/滤镜/调节/模糊/表情）
   package_info_plus: ^8.1.3
   shared_preferences: ^2.3.2

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_slidable/flutter_slidable.dart';
 
 import '../../models/im_conversation.dart';
 import '../../services/api_client.dart';
@@ -146,6 +147,19 @@ class _MessagesPageState extends State<MessagesPage> {
     );
   }
 
+  /// 左滑删除会话（单向删除：仅自己不显示，服务端标记 userDeleted=1，
+  /// 对方不受影响；新消息到来时服务端重置后会话自动恢复显示）。
+  Future<void> _deleteConversation(ImConversation c) async {
+    try {
+      await ConversationStore.instance.deleteConversation(c.type, c.targetId);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('删除失败：${ApiClient.errorMessage(e)}')),
+      );
+    }
+  }
+
   Widget _buildBody(ThemeColors colors) {
     if (_loading && ConversationStore.instance.conversations.isEmpty) {
       return const Center(child: CircularProgressIndicator(color: AppColors.lime));
@@ -171,7 +185,24 @@ class _MessagesPageState extends State<MessagesPage> {
         itemCount: list.length,
         separatorBuilder: (_, _) =>
             Divider(height: 1, indent: 84, endIndent: 16, color: colors.divider),
-        itemBuilder: (context, i) => _ConversationTile(conversation: list[i]),
+        itemBuilder: (context, i) => Slidable(
+          key: ValueKey('conv_${list[i].type.value}_${list[i].targetId}'),
+          // 仅左侧滑动（微信风格：右滑无操作）
+          endActionPane: ActionPane(
+            motion: const BehindMotion(),
+            extentRatio: 0.24,
+            children: [
+              SlidableAction(
+                onPressed: (ctx) => _deleteConversation(list[i]),
+                backgroundColor: const Color(0xFFFA5151),
+                foregroundColor: Colors.white,
+                icon: Icons.delete_outline,
+                label: '删除',
+              ),
+            ],
+          ),
+          child: _ConversationTile(conversation: list[i]),
+        ),
       ),
     );
   }
