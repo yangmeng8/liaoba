@@ -15,6 +15,7 @@ import '../../stores/presence_store.dart';
 import '../chat/chat_page.dart';
 import '../contacts/create_group_page.dart';
 import '../contacts/friend_apply_page.dart';
+import '../contacts/qr_scan_page.dart';
 
 /// 消息 Tab：会话列表（客户端由消息流聚合，对应 H5 conversationStore）。
 class MessagesPage extends StatefulWidget {
@@ -77,11 +78,15 @@ class _MessagesPageState extends State<MessagesPage> {
       items: const [
         HeaderMenuItem(icon: Icons.person_add_alt_1_outlined, label: '添加好友'),
         HeaderMenuItem(icon: Icons.groups_outlined, label: '创建群聊'),
+        HeaderMenuItem(icon: Icons.qr_code_scanner, label: '扫一扫'),
       ],
       onSelect: (i) => Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (_) =>
-              i == 0 ? const FriendApplyPage() : const CreateGroupPage(),
+          builder: (_) => switch (i) {
+            0 => const FriendApplyPage(),
+            1 => const CreateGroupPage(),
+            _ => const QrScanPage(),
+          },
         ),
       ),
     );

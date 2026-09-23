@@ -8,11 +8,17 @@ import '../../services/im_api.dart';
 import '../../shared/app_colors.dart';
 import '../../shared/app_theme.dart';
 import '../../shared/im_avatar.dart';
+import 'qr_scan_page.dart';
 
-/// 添加好友页：手机号搜索目标用户（/app-api/member/user/findUserByMobile）+
-/// 好友备注（≤16，apply 的 displayName）+ 申请理由（≤255，自动填充「我是昵称」）。
+/// 添加好友页：手机号/IM号搜索目标用户（/app-api/member/user/findUserByMobile，
+/// 后端按手机号或 IM号双语义匹配）+ 好友备注（≤16，apply 的 displayName）
+/// + 申请理由（≤255，自动填充「我是昵称」）。
+/// [initialKeyword] 扫一扫进入时预填的 IM号（进页自动搜索）。
 class FriendApplyPage extends StatefulWidget {
-  const FriendApplyPage({super.key});
+  const FriendApplyPage({super.key, this.initialKeyword});
+
+  /// 预填搜索关键字（IM号），非空则进页自动搜索。
+  final String? initialKeyword;
 
   @override
   State<FriendApplyPage> createState() => _FriendApplyPageState();
@@ -52,8 +58,14 @@ class _FriendApplyPageState extends State<FriendApplyPage> {
     super.dispose();
   }
 
-  /// 拉好友列表（标记「已添加」用，失败静默）+ 申请理由预填「我是昵称」。
+  /// 拉好友列表（标记「已添加」用，失败静默）+ 申请理由预填「我是昵称」
+  /// + 扫一扫进入时预填 IM号并自动搜索。
   Future<void> _init() async {
+    final keyword = (widget.initialKeyword ?? '').trim();
+    if (keyword.isNotEmpty) {
+      _mobileCtrl.text = keyword;
+      _search();
+    }
     try {
       final friends = await ImApi.getFriendList();
       if (!mounted) return;
@@ -62,6 +74,11 @@ class _FriendApplyPageState extends State<FriendApplyPage> {
         ..addAll(friends
             .where((f) => f.status == ImCommonStatus.enable)
             .map((f) => f.friendUserId));
+      // 列表到达后重算一次「已添加」状态（扫码自动搜索时可能列表先回）
+      final t = _target;
+      if (t != null && !_isSelf) {
+        setState(() => _isFriend = _friendIds.contains(t.id));
+      }
     } catch (_) {
       // 静默：仅影响「已添加」标记，不阻塞页面
     }
@@ -69,15 +86,18 @@ class _FriendApplyPageState extends State<FriendApplyPage> {
     _contentCtrl.text = '我是$myNickname';
   }
 
-  /// 手机号搜索目标用户。
+  /// 手机号/IM号搜索目标用户（后端双语义匹配同一接口）。
   Future<void> _search() async {
-    final mobile = _mobileCtrl.text.trim();
-    if (mobile.isEmpty) {
-      setState(() => _searchMsg = '请输入对方手机号');
+    final keyword = _mobileCtrl.text.trim();
+    if (keyword.isEmpty) {
+      setState(() => _searchMsg = '请输入对方手机号/IM号');
       return;
     }
-    if (!RegExp(r'^1[3-9]\d{9}$').hasMatch(mobile)) {
-      setState(() => _searchMsg = '手机号格式不正确');
+    final isMobile = RegExp(r'^1[3-9]\d{9}$').hasMatch(keyword);
+    // IM号格式：4-32 位字母数字（避免误输任意内容直接打接口）
+    final isImCode = RegExp(r'^[A-Za-z0-9]{4,32}$').hasMatch(keyword);
+    if (!isMobile && !isImCode) {
+      setState(() => _searchMsg = '手机号/IM号格式不正确');
       return;
     }
     setState(() {
@@ -86,13 +106,13 @@ class _FriendApplyPageState extends State<FriendApplyPage> {
       _target = null;
     });
     try {
-      final user = await AuthApi.findUserByMobile(mobile);
+      final user = await AuthApi.findUserByMobile(keyword);
       if (!mounted) return;
       setState(() {
         _searching = false;
         _target = user;
         if (user == null) {
-          _searchMsg = '未找到该手机号对应的用户';
+          _searchMsg = '未找到该手机号/IM号对应的用户';
         } else {
           _isSelf = user.id == (AuthManager.instance.userId ?? 0);
           _isFriend = _friendIds.contains(user.id);
@@ -175,6 +195,8 @@ class _FriendApplyPageState extends State<FriendApplyPage> {
                   _buildSearchResult(colors),
                 ]),
                 const SizedBox(height: 22),
+                _buildScanEntry(colors),
+                const SizedBox(height: 22),
                 _buildCard(colors, [
                   _buildField(
                     colors,
@@ -255,22 +277,51 @@ class _FriendApplyPageState extends State<FriendApplyPage> {
   Widget _buildDivider(ThemeColors colors) =>
       Divider(height: 1, indent: 16, endIndent: 16, color: colors.divider);
 
-  /// 手机号输入行：回车 / 点击「搜索」触发查找。
+  /// 扫一扫入口：跳转相机扫码页，识别好友二维码后自动搜索。
+  Widget _buildScanEntry(ThemeColors colors) {
+    return _buildCard(colors, [
+      InkWell(
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const QrScanPage()),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: Row(
+            children: [
+              const Icon(Icons.qr_code_scanner,
+                  size: 24, color: AppColors.lime),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Text(
+                  '扫一扫添加好友',
+                  style: TextStyle(fontSize: 16, color: colors.text),
+                ),
+              ),
+              Icon(Icons.chevron_right, size: 22, color: colors.muted),
+            ],
+          ),
+        ),
+      ),
+    ]);
+  }
+
+  /// 手机号/IM号输入行：回车 / 点击「搜索」触发查找。
   Widget _buildSearchField(ThemeColors colors) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
       child: Row(
         children: [
-          Text('手机号', style: TextStyle(fontSize: 15, color: colors.text)),
+          Text('手机号/IM号',
+              style: TextStyle(fontSize: 15, color: colors.text)),
           const SizedBox(width: 16),
           Expanded(
             child: TextField(
               controller: _mobileCtrl,
-              keyboardType: TextInputType.phone,
+              keyboardType: TextInputType.text,
               textInputAction: TextInputAction.search,
               onSubmitted: (_) => _search(),
               decoration: InputDecoration(
-                hintText: '输入对方手机号',
+                hintText: '输入对方手机号/IM号',
                 isDense: true,
                 counterText: '',
                 border: OutlineInputBorder(

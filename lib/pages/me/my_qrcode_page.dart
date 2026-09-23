@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import '../contacts/qr_scan_page.dart';
 import '../../services/auth_api.dart';
 import '../../services/auth_manager.dart';
 import '../../shared/im_avatar.dart';
@@ -218,8 +219,9 @@ class _MyQrcodePageState extends State<MyQrcodePage> {
               icon: Icons.qr_code_scanner_rounded,
               label: '扫一扫',
               onTap: () {
-                // TODO: 调起扫一扫
-                _toast(context, '扫一扫');
+                // 跳转相机扫码页，识别好友二维码后自动搜索添加
+                Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) => const QrScanPage()));
               },
             ),
             _ActionButton(

@@ -15,6 +15,7 @@ import 'create_group_page.dart';
 import 'friend_apply_page.dart';
 import 'friend_buckets.dart';
 import 'group_list_page.dart';
+import 'qr_scan_page.dart';
 import 'request_center_page.dart';
 import 'user_profile_page.dart';
 
@@ -100,18 +101,22 @@ class _ContactsPageState extends State<ContactsPage> {
   /// 字母分桶（非搜索态）。
   List<FriendBucket> get _buckets => buildFriendBuckets(activeFriends(_friends));
 
-  /// 右上角「+」：微信风格下拉菜单（添加好友 / 创建群聊，按钮正下方弹出）。
+  /// 右上角「+」：微信风格下拉菜单（添加好友 / 创建群聊 / 扫一扫，按钮正下方弹出）。
   void _showAddMenu(BuildContext anchorContext) {
     showHeaderMenu(
       anchorContext: anchorContext,
       items: const [
         HeaderMenuItem(icon: Icons.person_add_alt_1_outlined, label: '添加好友'),
         HeaderMenuItem(icon: Icons.group_add_outlined, label: '创建群聊'),
+        HeaderMenuItem(icon: Icons.qr_code_scanner, label: '扫一扫'),
       ],
       onSelect: (i) => Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (_) =>
-              i == 0 ? const FriendApplyPage() : const CreateGroupPage(),
+          builder: (_) => switch (i) {
+            0 => const FriendApplyPage(),
+            1 => const CreateGroupPage(),
+            _ => const QrScanPage(),
+          },
         ),
       ),
     );
