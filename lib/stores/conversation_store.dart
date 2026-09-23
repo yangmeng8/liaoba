@@ -132,6 +132,13 @@ class ConversationStore with ChangeNotifier {
             break;
         }
       }
+    } else if (n.conversationType == 1 && asInt(n.payload['status']) == 3) {
+      // 私聊消息删除（status=3）：单删仅删除者收到、双删双方收到，
+      // 服务端已标记删除，按 payload.id 精确移除缓存（会话列表摘要同步刷新）
+      final deletedId = asInt(n.payload['id']);
+      if (deletedId > 0) {
+        _privateMsgs.removeWhere((m) => m.id == deletedId);
+      }
     }
     _scheduleReload();
   }
@@ -235,8 +242,9 @@ class ConversationStore with ChangeNotifier {
     final groupMsgs = results[5] as List<ImGroupMessage>;
     final channelMsgs = results[6] as List<ImChannelMessage>;
 
-    // ② 落内存：消息追加进累积缓存，元数据整体重建
-    _privateMsgs.addAll(privateMsgs);
+    // ② 落内存：消息追加进累积缓存（status=3 已删除的私聊消息不进缓存），
+    // 元数据整体重建
+    _privateMsgs.addAll(privateMsgs.where((m) => !m.isDeleted));
     _groupMsgs.addAll(groupMsgs);
     _channelMsgs.addAll(channelMsgs);
     friends

@@ -48,6 +48,9 @@ class ImPrivateMessage {
   /// 是否已被撤回（对应后端 ImMessageStatusEnum.RECALL = 2）。
   bool get isRecalled => status == 2;
 
+  /// 已删除（status=3：私聊单删/双删后服务端标记，不再展示）。
+  bool get isDeleted => status == 3;
+
   /// 消息文本：content 为 JSON 字符串（文本消息形如 {"content":"你好"}），
   /// 解析失败时回退为原始字符串；RTC 通话消息给通话摘要；
   /// 媒体消息给占位文案（[语音]/[图片] 等，避免列表露出 url）。
@@ -135,6 +138,9 @@ class ImGroupMessage {
 
   /// 是否已被撤回（对应后端 ImMessageStatusEnum.RECALL = 2）。
   bool get isRecalled => status == 2;
+
+  /// 已删除（status=3：私聊单删/双删后服务端标记，不再展示）。
+  bool get isDeleted => status == 3;
 
   /// 消息文本：content 为 JSON 字符串（文本消息形如 {"content":"你好"}），
   /// 解析失败时回退为原始字符串；RTC 通话消息给通话摘要；

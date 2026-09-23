@@ -544,6 +544,22 @@ class ImApi {
     );
   }
 
+  /// 删除私聊消息（服务端标记 status=3，不再展示）。
+  /// [bothSides] true=为我和对方删除（双删，双方收到 WS）；
+  /// false=仅为自己删除（单删，仅删除者收到 WS）。
+  static Future<void> deletePrivateMessage({
+    required int messageId,
+    required bool bothSides,
+  }) async {
+    await ApiClient.dio.delete(
+      '/app-api/im/message/private/delete',
+      queryParameters: {
+        'messageId': messageId,
+        'bothSides': bothSides,
+      },
+    );
+  }
+
   // ==================== 文件上传 ====================
 
   /// 上传文件到基础设施文件服务（语音/表情/图片/视频/文件等）。

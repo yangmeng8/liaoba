@@ -616,7 +616,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
                   style: TextStyle(fontSize: 16, color: colors.text),
                 ),
               ),
-              if (trailing != null) trailing,
+              ?trailing,
               if (onTap != null)
                 Icon(Icons.chevron_right, size: 20, color: colors.muted),
             ],

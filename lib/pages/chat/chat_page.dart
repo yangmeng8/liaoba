@@ -194,6 +194,15 @@ class _ChatPageState extends State<ChatPage> {
       if (n.contentType == ChatMsgType.burnSettingChanged) {
         _insertBurnSettingNotice(n.payload);
       }
+      // 私聊消息删除（payload.status=3）：单删仅删除者收到、双删双方收到，
+      // 服务端已标记删除，按 payload.id 精确移除本地消息
+      if (n.conversationType == 1 && asInt(n.payload['status']) == 3) {
+        final deletedId = asInt(n.payload['id']);
+        final had = _messages.any((m) => m.id == deletedId);
+        if (had && mounted) {
+          setState(() => _messages.removeWhere((m) => m.id == deletedId));
+        }
+      }
       // 群消息批量删除（2206）：按 messageIds 精确移除本地消息，
       // 随后防抖刷新补齐剩余变化
       if (n.contentType == ImSystemMessageType.groupMsgDelete) {
@@ -445,6 +454,7 @@ class _ChatPageState extends State<ChatPage> {
         limit: _pageSize,
         maxId: maxId,
       ))
+          .where((m) => !m.isDeleted) // status=3 已删除不展示
           .map(ChatMessage.fromPrivate)
           .toList();
     } else if (_isGroup) {
@@ -1572,14 +1582,68 @@ class _ChatPageState extends State<ChatPage> {
     });
   }
 
-  /// 本地删除（纯客户端：只影响本设备，无服务端接口）。
+  /// 删除消息：私聊走服务端删除（双删/单删弹框选择），
+  /// 群聊/频道为本地删除（只影响本设备）。
   /// 删光当前列表时补拉更早一页（对齐 H5 loadOlderMessagesAfterClear）。
   Future<void> _deleteLocalMessage(ChatMessage m) async {
     final minId = m.id;
+    // 私聊：走服务端删除（弹框选择 双删/仅自己删），成功后本地移除，
+    // 对端/自己另经 WS（status=3）同步移除；群聊/频道/本地占位保持本地删除
+    if (_isPrivate && minId != null) {
+      final both = await _showPrivateDeleteConfirm();
+      if (both == null) return;
+      try {
+        await ImApi.deletePrivateMessage(
+          messageId: minId,
+          bothSides: both,
+        );
+      } catch (e) {
+        if (mounted) _showSnack(ApiClient.errorMessage(e));
+        return;
+      }
+      if (!mounted) return;
+      setState(() => _messages.removeWhere((e) => e.key == m.key));
+      if (_messages.isEmpty && !_noMore) {
+        await _loadOlderAfterClear(minId);
+      }
+      return;
+    }
     setState(() => _messages.removeWhere((e) => e.key == m.key));
     if (_messages.isEmpty && !_noMore && minId != null) {
       await _loadOlderAfterClear(minId);
     }
+  }
+
+  /// 私聊删除确认弹框（微信风格双选项）。
+  /// 返回 true=为我和对方删除（双删）、false=仅为自己删除（单删）、null=取消。
+  Future<bool?> _showPrivateDeleteConfirm() {
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('是否删除该条消息？'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text('为我和「${widget.title}」删除'),
+              onTap: () => Navigator.pop(ctx, true),
+            ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('仅为我删除'),
+              onTap: () => Navigator.pop(ctx, false),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
+        ],
+      ),
+    );
   }
 
   /// 删光列表后补拉（以被删消息编号为游标拉取更早一页）。
