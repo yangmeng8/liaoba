@@ -326,15 +326,55 @@ class ImApi {
         .toList();
   }
 
-  /// 增量拉取当前用户的会话读位置（未读数计算用）。
-  /// [lastId] 游标；[limit] 每页条数。
+  /// 置顶/取消置顶会话（服务端会话级置顶，多端同步）。
+  static Future<void> setConversationTop({
+    required ImConversationType conversationType,
+    required int targetId,
+    required bool top,
+  }) async {
+    final resp = await ApiClient.dio.put(
+      '/app-api/im/conversation-read/top',
+      queryParameters: {
+        'conversationType': conversationType.value,
+        'targetId': targetId,
+        'top': top,
+      },
+    );
+    ApiClient.unwrap(resp);
+  }
+
+  /// 拉取当前用户的会话列表快照（冷启动/下拉刷新/切账号用）。
+  /// 服务端已按置顶优先排序、已过滤用户删除的会话（userDeleted=1）。
+  static Future<List<ImConversationRead>> getConversationReadList({
+    int limit = 200,
+  }) async {
+    final resp = await ApiClient.dio.get(
+      '/app-api/im/conversation-read/list',
+      queryParameters: {'limit': limit},
+    );
+    final data = ApiClient.unwrap(resp);
+    if (data is! List) return const [];
+    return data
+        .map((e) => ImConversationRead.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// 增量拉取当前用户的会话读位置变更（重连/断线补偿用）。
+  /// 返回变更流（含 userDeleted=1 的删除记录，调用方 merge 过滤/恢复）。
+  /// [lastUpdateTime] 上次拉取到的最新更新时间毫秒（首次不传）；
+  /// [lastId] 上次拉取到的最后一条记录 id（首次不传）；[limit] 每页条数。
   static Future<List<ImConversationRead>> pullConversationReads({
+    int? lastUpdateTime,
     int? lastId,
     required int limit,
   }) async {
     final resp = await ApiClient.dio.get(
       '/app-api/im/conversation-read/pull',
-      queryParameters: {'lastId': ?lastId, 'limit': limit},
+      queryParameters: {
+        'lastUpdateTime': ?lastUpdateTime,
+        'lastId': ?lastId,
+        'limit': limit,
+      },
     );
     final data = ApiClient.unwrap(resp);
     if (data is! List) return const [];

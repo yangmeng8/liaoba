@@ -353,8 +353,27 @@ class ImConversationRead {
   final int id;
   final ImConversationType conversationType;
   final int targetId;
+
+  /// 最大已读消息编号。
   final int messageId;
+
+  /// 最近更新时间（增量拉取游标用）。
   final DateTime? updateTime;
+
+  /// 用户是否删除会话：0 否 1 是。
+  final int userDeleted;
+
+  /// 是否置顶：0 否 1 是。
+  final int isTop;
+
+  /// 置顶时间（多个置顶之间排序用）。
+  final DateTime? topTime;
+
+  /// 最近已读时间。
+  final DateTime? readTime;
+
+  /// 是否免打扰：0 否 1 是。
+  final int isMute;
 
   const ImConversationRead({
     required this.id,
@@ -362,6 +381,11 @@ class ImConversationRead {
     required this.targetId,
     required this.messageId,
     this.updateTime,
+    this.userDeleted = 0,
+    this.isTop = 0,
+    this.topTime,
+    this.readTime,
+    this.isMute = 0,
   });
 
   factory ImConversationRead.fromJson(Map<String, dynamic> json) {
@@ -372,8 +396,25 @@ class ImConversationRead {
       targetId: asInt(json['targetId']),
       messageId: asInt(json['messageId']),
       updateTime: parseDateTime(json['updateTime']),
+      userDeleted: asInt(json['userDeleted']),
+      isTop: asInt(json['isTop']),
+      topTime: parseDateTime(json['topTime']),
+      readTime: parseDateTime(json['readTime']),
+      isMute: asInt(json['isMute']),
     );
   }
+
+  /// 更新时间毫秒数（0=缺失；增量 pull 游标传参用）。
+  int get updateTimeMs => updateTime?.millisecondsSinceEpoch ?? 0;
+
+  /// 用户已删除该会话。
+  bool get deleted => userDeleted == 1;
+
+  /// 会话置顶（服务端会话级置顶，与好友表 pinned、本地置顶取或）。
+  bool get top => isTop == 1;
+
+  /// 会话快照表 key（type_targetId，与消息流聚合 key 同构）。
+  String get mapKey => '${conversationType.value}_$targetId';
 }
 
 /// 频道（对应后端 ImChannelRespVO）。

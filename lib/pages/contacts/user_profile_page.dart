@@ -6,6 +6,7 @@ import '../../services/api_client.dart';
 import '../../services/auth_api.dart';
 import '../../services/auth_manager.dart';
 import '../../services/im_api.dart';
+import '../../stores/conversation_store.dart';
 import '../../shared/app_colors.dart';
 import '../../shared/app_theme.dart';
 import '../../shared/burn_picker.dart';
@@ -51,6 +52,9 @@ class _UserProfilePageState extends State<UserProfilePage> {
   /// 阅后即焚：当前配置（默认关）。
   bool _burnEnabled = false;
   int _burnDuration = 0;
+
+  /// 置顶聊天（服务端会话级置顶，消息列表同步置顶）。
+  bool _pinned = false;
 
   @override
   void initState() {
@@ -99,8 +103,10 @@ class _UserProfilePageState extends State<UserProfilePage> {
           : (friend != null && !friend.blocked)
               ? _Relation.friend
               : _Relation.stranger;
-      // 好友态：静默拉当前阅后即焚配置（失败保持默认关，不阻塞）
+      // 好友态：同步置顶状态 + 静默拉当前阅后即焚配置（失败保持默认，不阻塞）
       if (relation != _Relation.stranger) {
+        _pinned = ConversationStore.instance
+            .isConversationTop(ImConversationType.private, widget.userId);
         try {
           final burn = await ImApi.getBurnSetting(widget.userId);
           if (burn != null) {
@@ -245,6 +251,27 @@ class _UserProfilePageState extends State<UserProfilePage> {
       });
     } catch (_) {
       // 静默：保持现有展示
+    }
+  }
+
+  /// 切换置顶聊天（服务端会话级置顶，多端同步；成功即刷新消息列表，
+  /// 失败保持原状态并提示）。
+  Future<void> _togglePinned(bool value) async {
+    if (_actionRunning) return;
+    setState(() => _actionRunning = true);
+    try {
+      await ConversationStore.instance.setConversationTop(
+        ImConversationType.private,
+        widget.userId,
+        value,
+      );
+      if (!mounted) return;
+      setState(() => _pinned = value);
+      _showMsg(value ? '已置顶该聊天' : '已取消置顶');
+    } catch (e) {
+      if (mounted) _showMsg('置顶设置失败：${ApiClient.errorMessage(e)}');
+    } finally {
+      if (mounted) setState(() => _actionRunning = false);
     }
   }
 
@@ -550,6 +577,16 @@ class _UserProfilePageState extends State<UserProfilePage> {
               style: TextStyle(fontSize: 15, color: colors.muted),
             ),
             onTap: _actionRunning ? null : _showBurnPicker,
+          ),
+          Divider(height: 1, indent: 54, color: colors.divider),
+          _buildCell(
+            colors,
+            leading: const Icon(Icons.push_pin_outlined, size: 22),
+            title: '置顶聊天',
+            trailing: Switch(
+              value: _pinned,
+              onChanged: _actionRunning ? null : _togglePinned,
+            ),
           ),
         ],
       ),

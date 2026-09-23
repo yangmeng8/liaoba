@@ -52,14 +52,16 @@ class _MessagesPageState extends State<MessagesPage> {
     super.dispose();
   }
 
-  Future<void> _load() async {
+  /// [refresh] true 时读位置走 list 全量快照（下拉刷新/失败重试用；
+  /// 冷启动由 store 游标自动判定）。
+  Future<void> _load({bool refresh = false}) async {
     if (_loading) return;
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
-      await ConversationStore.instance.load();
+      await ConversationStore.instance.load(refreshReads: refresh);
     } catch (e) {
       if (mounted) setState(() => _error = ApiClient.errorMessage(e));
     } finally {
@@ -152,7 +154,7 @@ class _MessagesPageState extends State<MessagesPage> {
       return _ErrorRetry(
         message: _error!,
         colors: colors,
-        onRetry: _load,
+        onRetry: () => _load(refresh: true),
       );
     }
     final list = _filtered;
@@ -162,7 +164,7 @@ class _MessagesPageState extends State<MessagesPage> {
     }
     return RefreshIndicator(
       color: AppColors.lime,
-      onRefresh: _load,
+      onRefresh: () => _load(refresh: true),
       child: ListView.separated(
         physics: const AlwaysScrollableScrollPhysics(),
         padding: EdgeInsets.zero, // 去掉 ListView 自动加的 MediaQuery 顶部安全区空白
