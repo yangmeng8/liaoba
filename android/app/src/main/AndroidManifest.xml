@@ -8,6 +8,9 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
+    <!-- 保存二维码到相册（Android 10+ 走 MediaStore 免权限；旧版本声明写入，maxSdk 28） -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28"/>
     <!-- 后端图片/文件 URL 若为 http 明文，Android 9+ release 默认拒绝加载，放行保证测试环境可用 -->
     <application
         android:label="IM"

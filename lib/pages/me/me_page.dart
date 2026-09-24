@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../../services/auth_api.dart';
 import '../../services/auth_manager.dart';
@@ -19,6 +21,9 @@ class MePage extends StatefulWidget {
 }
 
 class _MePageState extends State<MePage> {
+  /// 用户资料变化订阅（头像/昵称/签名在资料页修改后即时刷新本页显示）。
+  StreamSubscription<void>? _profileSub;
+
   @override
   void initState() {
     super.initState();
@@ -26,6 +31,17 @@ class _MePageState extends State<MePage> {
     AuthApi.loadUserProfile().then((_) {
       if (mounted) setState(() {});
     }).catchError((_) {});
+    // 资料页改头像/昵称/签名等：changes 广播触发重建
+    //（IndexedStack 常驻 tab，切回时不会自动 rebuild）
+    _profileSub = AuthManager.instance.changes.listen((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _profileSub?.cancel();
+    super.dispose();
   }
 
   static VoidCallback? _onItemTap(String title, BuildContext context) {

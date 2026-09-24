@@ -38,6 +38,8 @@ class AuthManager {
   static const _kAvatar = 'auth.avatar';
   static const _kMobile = 'auth.mobile';
   static const _kImCode = 'auth.im_code';
+  static const _kSignature = 'auth.signature';
+  static const _kSex = 'auth.sex';
 
   int? userId;
   String? accessToken;
@@ -53,6 +55,12 @@ class AuthManager {
   /// IM 号（member/user/get 的 code 字段，用户唯一业务号）。
   String? imCode;
 
+  /// 个性签名（member/user/get 的 signature 字段）。
+  String? signature;
+
+  /// 性别（member/user/get 的 sex 字段：0 未知 / 1 男 / 2 女）。
+  int? sex;
+
   bool get isLoggedIn => accessToken != null && accessToken!.isNotEmpty;
 
   /// App 启动时调用，从磁盘恢复登录态。
@@ -67,24 +75,32 @@ class AuthManager {
     avatar = prefs.getString(_kAvatar);
     mobile = prefs.getString(_kMobile);
     imCode = prefs.getString(_kImCode);
+    signature = prefs.getString(_kSignature);
+    sex = prefs.getInt(_kSex);
   }
 
-  /// 更新登录用户资料（昵称/头像/手机号/IM号，来自用户中心接口）。
+  /// 更新登录用户资料（昵称/头像/手机号/IM号/签名/性别，来自用户中心接口）。
   Future<void> updateProfile({
     required String nickname,
     required String avatar,
     String? mobile,
     String? imCode,
+    String? signature,
+    int? sex,
   }) async {
     this.nickname = nickname;
     this.avatar = avatar;
     if (mobile != null) this.mobile = mobile;
     if (imCode != null) this.imCode = imCode;
+    if (signature != null) this.signature = signature;
+    if (sex != null) this.sex = sex;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_kNickname, nickname);
     await prefs.setString(_kAvatar, avatar);
     if (mobile != null) await prefs.setString(_kMobile, mobile);
     if (imCode != null) await prefs.setString(_kImCode, imCode);
+    if (signature != null) await prefs.setString(_kSignature, signature);
+    if (sex != null) await prefs.setInt(_kSex, sex);
     _emitChange();
   }
 
@@ -151,6 +167,8 @@ class AuthManager {
     avatar = null;
     mobile = null;
     imCode = null;
+    signature = null;
+    sex = null;
 
     final prefs = await SharedPreferences.getInstance();
     await prefs
@@ -162,7 +180,9 @@ class AuthManager {
         .then((_) => prefs.remove(_kNickname))
         .then((_) => prefs.remove(_kAvatar))
         .then((_) => prefs.remove(_kMobile))
-        .then((_) => prefs.remove(_kImCode));
+        .then((_) => prefs.remove(_kImCode))
+        .then((_) => prefs.remove(_kSignature))
+        .then((_) => prefs.remove(_kSex));
     _emitChange();
   }
 }

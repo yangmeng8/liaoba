@@ -4,8 +4,10 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import '../../services/api_client.dart';
 import '../../services/auth_api.dart';
 import '../../services/auth_manager.dart';
+import '../../services/im_api.dart';
 import '../../shared/app_theme.dart';
 import '../../shared/im_avatar.dart';
 import 'my_qrcode_page.dart';
@@ -24,6 +26,9 @@ class _ProfilePageState extends State<ProfilePage> {
   /// 用户选择的头像文件；null 时显示网络头像/默认占位。
   XFile? _avatarFile;
 
+  /// 头像上传/保存中（防连点）。
+  bool _savingAvatar = false;
+
   /// 当前昵称（AuthManager 缓存，可从编辑页回写）。
   String _nickname = '';
 
@@ -40,13 +45,15 @@ class _ProfilePageState extends State<ProfilePage> {
     super.initState();
     final profile = AuthManager.instance;
     _nickname = (profile.nickname ?? '').trim();
-    _signature = '';
-    // 进页刷新用户资料（昵称/头像/手机号）；缓存兜底，失败静默
+    _signature = (profile.signature ?? '').trim();
+    // 进页刷新用户资料（昵称/头像/签名等）；缓存兜底，失败静默
     AuthApi.loadUserProfile().then((_) {
       if (!mounted) return;
       final n = (AuthManager.instance.nickname ?? '').trim();
+      final s = (AuthManager.instance.signature ?? '').trim();
       setState(() {
         if (n.isNotEmpty) _nickname = n;
+        _signature = s;
       });
     }).catchError((_) {});
     // 改绑手机号等资料变更：立即重建显示新值
@@ -66,6 +73,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
   /// 点击头像行 → 弹出底部选择框。
   void _onAvatarTap() {
+    if (_savingAvatar) return; // 上传中防重入
     final colors = context.colors;
     showModalBottomSheet<void>(
       context: context,
@@ -121,42 +129,78 @@ class _ProfilePageState extends State<ProfilePage> {
         maxWidth: 512,
         maxHeight: 512,
       );
-      if (picked != null) {
+      if (picked == null || !mounted) return;
+      setState(() => _savingAvatar = true);
+      // 上传头像文件（infra/file/upload，返回可访问 URL）
+      final url = await ImApi.uploadFile(
+        filePath: picked.path,
+        directory: 'avatar',
+      );
+      // 保存到用户资料（PUT member/user/update，avatar 为新 URL）
+      final ok = await _saveProfileChange(avatar: url);
+      if (!mounted) return;
+      if (ok) {
         setState(() => _avatarFile = picked);
         _toast('头像已更新');
       }
     } catch (e) {
       // 用户拒绝权限或取消时 image_picker 会抛异常，这里兜底提示。
-      _toast('无法获取图片：$e');
+      if (mounted) _toast(ApiClient.errorMessage(e));
+    } finally {
+      if (mounted) setState(() => _savingAvatar = false);
     }
   }
 
-  /// 点击签名行 → 跳转编辑页，保存后回写。
+  /// 调 PUT /member/user/update 保存资料变更（后端四项必传，
+  /// 用缓存值 + 本次变更项组装），成功后回写 AuthManager 缓存。
+  Future<bool> _saveProfileChange(
+      {String? nickname, String? signature, String? avatar}) async {
+    final am = AuthManager.instance;
+    final newAvatar = avatar ?? am.avatar ?? '';
+    try {
+      await AuthApi.updateUserProfile(
+        nickname: nickname ?? am.nickname ?? '',
+        avatar: newAvatar,
+        sex: am.sex ?? 0,
+        signature: signature ?? am.signature ?? '',
+      );
+      await am.updateProfile(
+        nickname: nickname ?? am.nickname ?? '',
+        avatar: newAvatar,
+        signature: signature ?? am.signature ?? '',
+      );
+      return true;
+    } catch (e) {
+      if (mounted) _toast(ApiClient.errorMessage(e));
+      return false;
+    }
+  }
+
+  /// 点击签名行 → 跳转编辑页，保存后调接口回写。
   Future<void> _onSignatureTap() async {
     final result = await Navigator.of(context).push<String>(
       MaterialPageRoute(
         builder: (_) => SignatureEditPage(initialSignature: _signature),
       ),
     );
-    if (result != null && mounted) {
-      setState(() => _signature = result);
+    if (result != null && mounted && result != _signature) {
+      if (await _saveProfileChange(signature: result)) {
+        setState(() => _signature = result);
+      }
     }
   }
 
-  /// 点击昵称行 → 跳转编辑页，保存后回写（本地缓存 + 页面）。
+  /// 点击昵称行 → 跳转编辑页，保存后调接口回写（服务端 + 缓存 + 页面）。
   Future<void> _onNicknameTap() async {
     final result = await Navigator.of(context).push<String>(
       MaterialPageRoute(
         builder: (_) => NicknameEditPage(initialNickname: _nickname),
       ),
     );
-    if (result != null && mounted) {
-      setState(() => _nickname = result);
-      // 回写 AuthManager（内存 + 磁盘），保证「我的」页等处展示一致
-      await AuthManager.instance.updateProfile(
-        nickname: result,
-        avatar: AuthManager.instance.avatar ?? '',
-      );
+    if (result != null && mounted && result != _nickname) {
+      if (await _saveProfileChange(nickname: result)) {
+        setState(() => _nickname = result);
+      }
     }
   }
 

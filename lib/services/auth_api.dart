@@ -175,8 +175,30 @@ class AuthApi {
         avatar: (data['avatar'] ?? '').toString(),
         mobile: (data['mobile'] ?? '').toString(),
         imCode: (data['code'] ?? '').toString(),
+        signature: (data['signature'] ?? '').toString(),
+        sex: asInt(data['sex']),
       );
     }
+  }
+
+  /// 修改用户基本信息（昵称/头像/性别/个性签名）。
+  /// 后端 required：avatar、nickname、sex、signature，四项必传
+  /// （用 AuthManager 缓存值 + 本次变更项组装）。
+  static Future<void> updateUserProfile({
+    required String nickname,
+    required String avatar,
+    required int sex,
+    required String signature,
+  }) async {
+    await ApiClient.dio.put(
+      '/app-api/member/user/update',
+      data: {
+        'nickname': nickname,
+        'avatar': avatar,
+        'sex': sex,
+        'signature': signature,
+      },
+    );
   }
 
   /// 通过手机号搜索用户（app-api/system/user 系列接口不存在；

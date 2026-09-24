@@ -1,4 +1,8 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:image_gallery_saver/image_gallery_saver.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../contacts/qr_scan_page.dart';
@@ -15,6 +19,12 @@ class MyQrcodePage extends StatefulWidget {
 }
 
 class _MyQrcodePageState extends State<MyQrcodePage> {
+  /// 二维码卡片截图边界（保存到相册用）。
+  final GlobalKey _cardKey = GlobalKey();
+
+  /// 保存中防连点。
+  bool _saving = false;
+
   @override
   void initState() {
     super.initState();
@@ -124,10 +134,45 @@ class _MyQrcodePageState extends State<MyQrcodePage> {
         ),
       );
 
+  /// 截图二维码卡片并保存到系统相册（iOS 相册 / Android MediaStore）。
+  Future<void> _saveQrCard() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    try {
+      final boundary = _cardKey.currentContext?.findRenderObject();
+      if (boundary is! RenderRepaintBoundary) {
+        if (mounted) _toast(context, '保存失败：页面未就绪');
+        return;
+      }
+      // 3x 采像素，保证相册里清晰
+      final ui.Image image = await boundary.toImage(pixelRatio: 3);
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (byteData == null) {
+        if (mounted) _toast(context, '保存失败：图片编码失败');
+        return;
+      }
+      final result = await ImageGallerySaver.saveImage(
+        byteData.buffer.asUint8List(),
+        quality: 100,
+        name: 'IM_QR_${DateTime.now().millisecondsSinceEpoch}',
+      );
+      final ok = result is Map && result['isSuccess'] == true;
+      if (!mounted) return;
+      _toast(context, ok ? '二维码已保存到相册' : '保存失败：${result is Map ? (result['errorMessage'] ?? '') : ''}');
+    } catch (e) {
+      if (mounted) _toast(context, '保存失败：$e');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
   /// 中间白色圆角卡片：二维码(嵌头像) + 昵称 + 副标题。
   Widget _buildQrCard() => Padding(
         padding: const EdgeInsets.symmetric(horizontal: 40),
-        child: Container(
+        child: RepaintBoundary(
+          // 卡片整体截图边界（保存相册用）
+          key: _cardKey,
+          child: Container(
           padding: const EdgeInsets.fromLTRB(28, 25, 28, 25),
           decoration: BoxDecoration(
             color: Colors.white,
@@ -207,6 +252,7 @@ class _MyQrcodePageState extends State<MyQrcodePage> {
             ],
           ),
         ),
+        ),
       );
 
   /// 底部两个圆形按钮：扫一扫 / 保存图片
@@ -226,11 +272,8 @@ class _MyQrcodePageState extends State<MyQrcodePage> {
             ),
             _ActionButton(
               icon: Icons.download_rounded,
-              label: '保存图片',
-              onTap: () {
-                // TODO: 保存二维码卡片到相册
-                _toast(context, '已保存到相册');
-              },
+              label: _saving ? '保存中…' : '保存图片',
+              onTap: _saveQrCard,
             ),
           ],
         ),

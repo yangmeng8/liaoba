@@ -50,8 +50,20 @@ class ImAvatar extends StatelessWidget {
           height: size,
           fit: BoxFit.cover,
           gaplessPlayback: true,
-          // 图片加载失败也走色卡兜底
-          errorBuilder: (_, _, _) => _buildFallback(),
+          // 加载中灰色占位（区分「加载中」与「失败兜底」）
+          loadingBuilder: (context, child, progress) {
+            if (progress == null) return child;
+            return Container(
+              width: size,
+              height: size,
+              color: const Color(0xFFE0E0E0),
+            );
+          },
+          // 图片加载失败也走色卡兜底（打印失败原因便于排查）
+          errorBuilder: (_, Object error, _) {
+            debugPrint('[Avatar] 加载失败: $src | $error');
+            return _buildFallback();
+          },
         ),
       );
     } else {
