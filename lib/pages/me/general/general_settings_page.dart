@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 import '../../../services/auth_api.dart';
 import '../../../services/auth_manager.dart';
 import '../../../services/im_websocket.dart';
@@ -10,8 +13,89 @@ import 'security/account_security_page.dart';
 import 'feedback_page.dart';
 import 'about_page.dart';
 
-class GeneralSettingsPage extends StatelessWidget {
+class GeneralSettingsPage extends StatefulWidget {
   const GeneralSettingsPage({super.key});
+
+  @override
+  State<GeneralSettingsPage> createState() => _GeneralSettingsPageState();
+}
+
+class _GeneralSettingsPageState extends State<GeneralSettingsPage> {
+  /// 当前缓存占用（临时目录文件总量），进页计算。
+  String _cacheSize = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshCacheSize();
+  }
+
+  /// 统计临时目录文件总大小（聊天图片/视频/录音/编辑器等临时产物）。
+  Future<void> _refreshCacheSize() async {
+    var bytes = 0;
+    try {
+      final dir = await getTemporaryDirectory();
+      if (await dir.exists()) {
+        await for (final e in dir.list(recursive: true, followLinks: false)) {
+          if (e is File) {
+            try {
+              bytes += await e.length();
+            } catch (_) {
+              // 文件被占用/已删除，忽略
+            }
+          }
+        }
+      }
+    } catch (_) {
+      // 目录不可用按 0 处理
+    }
+    if (mounted) setState(() => _cacheSize = _formatBytes(bytes));
+  }
+
+  String _formatBytes(int bytes) {
+    if (bytes <= 0) return '0B';
+    if (bytes < 1024) return '${bytes}B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)}KB';
+    return '${(bytes / 1024 / 1024).toStringAsFixed(1)}MB';
+  }
+
+  /// 清理缓存：图片内存解码缓存 + 群头像成员表 + 临时目录文件。
+  Future<void> _clearCache() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => _ClearCacheDialog(cacheSize: _cacheSize),
+    );
+    if (confirmed != true || !mounted) return;
+
+    // 1. Flutter 图片内存解码缓存
+    PaintingBinding.instance.imageCache.clear();
+    // 2. 群头像九宫格成员表缓存（下次进入重新拉取）
+    GroupAvatar.clearCache();
+    // 3. 临时目录（聊天媒体/录音/编辑器等；正被占用的文件删除失败自动跳过）
+    try {
+      final dir = await getTemporaryDirectory();
+      if (await dir.exists()) {
+        await for (final e in dir.list(followLinks: false)) {
+          try {
+            if (e is File) {
+              await e.delete();
+            } else if (e is Directory) {
+              await e.delete(recursive: true);
+            }
+          } catch (_) {
+            // 单个文件占用中，跳过
+          }
+        }
+      }
+    } catch (_) {
+      // 目录不可用忽略
+    }
+    await _refreshCacheSize();
+    if (mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('清理完成')));
+    }
+  }
 
   Future<void> _showLogoutConfirm(BuildContext context) async {
     final confirmed = await showDialog<bool>(
@@ -112,7 +196,12 @@ class GeneralSettingsPage extends StatelessWidget {
                           MaterialPageRoute(builder: (_) => const AboutPage()),
                         ),
                       ),
-                      const _SettingRow(title: '清理缓存'),
+                      _SettingRow(
+                        title: '清理缓存',
+                        // 右侧显示当前占用，计算中显示占位
+                        trailing: _cacheSize.isEmpty ? '—' : _cacheSize,
+                        onTap: _clearCache,
+                      ),
                       // const _SettingRow(
                       //     title: '网络错误线路优化', trailing: '线路 1'),
                     ],
@@ -156,6 +245,94 @@ class GeneralSettingsPage extends StatelessWidget {
               ),
             ),
           ],
+        ),
+      );
+}
+
+/// 清理缓存确认弹框（与退出登录弹框同风格）。
+class _ClearCacheDialog extends StatelessWidget {
+  final String cacheSize;
+  const _ClearCacheDialog({required this.cacheSize});
+
+  @override
+  Widget build(BuildContext context) => Dialog(
+        backgroundColor: context.colors.card,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '提示',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  color: context.colors.text,
+                ),
+              ),
+              const SizedBox(height: 24),
+              Text(
+                '确定要清理缓存吗？\n将删除 $cacheSize 的临时缓存文件（聊天图片、视频等预览需重新加载）',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 16, color: context.colors.muted),
+              ),
+              const SizedBox(height: 32),
+              Row(
+                children: [
+                  Expanded(
+                    child: SizedBox(
+                      height: 46,
+                      child: ElevatedButton(
+                        onPressed: () => Navigator.of(context).pop(false),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: context.colors.bg,
+                          foregroundColor: context.colors.text,
+                          elevation: 0,
+                          side: BorderSide(color: context.colors.divider),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(23),
+                          ),
+                        ),
+                        child: Text(
+                          '取消',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: context.colors.text,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: SizedBox(
+                      height: 46,
+                      child: ElevatedButton(
+                        onPressed: () => Navigator.of(context).pop(true),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.lime,
+                          foregroundColor: Colors.black,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(23),
+                          ),
+                        ),
+                        child: const Text(
+                          '清理',
+                          style: TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       );
 }
