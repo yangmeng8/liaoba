@@ -80,9 +80,9 @@ class _MePageState extends State<MePage> {
   Widget build(BuildContext context) {
     final items = [
       (Icons.badge_outlined, '个人资料'),
-      (Icons.inventory_2_outlined, '我的收藏'),
-      (Icons.notifications_none, '通知设置'),
-      (Icons.chat_outlined, '聊天设置'),
+      // (Icons.inventory_2_outlined, '我的收藏'),
+      // (Icons.notifications_none, '通知设置'),
+      // (Icons.chat_outlined, '聊天设置'),
       (Icons.palette_outlined, '外观设置'),
       (Icons.smart_toy_outlined, '通用'),
     ];

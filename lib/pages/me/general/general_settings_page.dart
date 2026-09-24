@@ -113,18 +113,18 @@ class GeneralSettingsPage extends StatelessWidget {
                         ),
                       ),
                       const _SettingRow(title: '清理缓存'),
-                      const _SettingRow(
-                          title: '网络错误线路优化', trailing: '线路 1'),
+                      // const _SettingRow(
+                      //     title: '网络错误线路优化', trailing: '线路 1'),
                     ],
                   ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(28, 10, 28, 0),
-                    child: Text(
-                      '网络链接正常时出现报错可尝试点击此按钮优化线路',
-                      style:
-                          TextStyle(fontSize: 14, color: context.colors.muted),
-                    ),
-                  ),
+                  // Padding(
+                  //   padding: const EdgeInsets.fromLTRB(28, 10, 28, 0),
+                  //   child: Text(
+                  //     '网络链接正常时出现报错可尝试点击此按钮优化线路',
+                  //     style:
+                  //         TextStyle(fontSize: 14, color: context.colors.muted),
+                  //   ),
+                  // ),
                 ],
               ),
             ),

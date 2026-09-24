@@ -180,7 +180,11 @@ class _HomeShellState extends State<HomeShell> {
           backgroundColor: tabBarBg,
           elevation: 0,
           selectedIndex: index,
-          onDestinationSelected: (i) => setState(() => index = i),
+          onDestinationSelected: (i) {
+            // Tab 切换触觉反馈（iOS Taptic tick / Android 触觉震动）
+            HapticFeedback.selectionClick();
+            setState(() => index = i);
+          },
           indicatorColor: Colors.transparent,
           labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
           labelTextStyle: WidgetStateProperty.resolveWith((states) {
