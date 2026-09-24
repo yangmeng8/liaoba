@@ -23,6 +23,7 @@ import '../../models/im_face.dart';
 import '../../models/im_message.dart';
 import '../../models/im_ws_frame.dart';
 import '../../rtc/rtc_controller.dart';
+import '../../stores/chat_background_store.dart';
 import '../../stores/presence_store.dart';
 import '../../services/api_client.dart';
 import '../../services/auth_api.dart';
@@ -169,6 +170,8 @@ class _ChatPageState extends State<ChatPage> {
   @override
   void initState() {
     super.initState();
+    // 恢复用户选中的聊天背景（外观设置-选择背景图；幂等）
+    ChatBackgroundStore.instance.load();
     _scrollCtrl.addListener(_onScroll);
     // 点输入框弹键盘时自动收起表情面板和更多面板（否则键盘+面板同屏会溢出）
     _inputFocus.addListener(() {
@@ -1809,12 +1812,18 @@ class _ChatPageState extends State<ChatPage> {
         // 键盘与表情面板严格互斥（面板打开时 padding 恒为 0），
         // 避免键盘收起动画与面板展开叠加导致 Column 溢出
         resizeToAvoidBottomInset: false,
-        // 浅色模式用外观设置的默认聊天背景（渐变+点阵）；深色模式保持纯色
+        // 浅色模式用外观设置选中的聊天背景（渐变+点阵）；深色模式保持纯色
         body: Stack(
           children: [
             if (Theme.of(context).brightness == Brightness.light)
               Positioned.fill(
-                child: ChatBackgroundLayer(bg: defaultChatBackground),
+                // ListenableBuilder：外观设置切换背景后聊天室实时生效
+                child: ListenableBuilder(
+                  listenable: ChatBackgroundStore.instance,
+                  builder: (_, _) => ChatBackgroundLayer(
+                    bg: ChatBackgroundStore.instance.bg,
+                  ),
+                ),
               ),
             Column(
               children: [
@@ -2147,9 +2156,14 @@ class _ChatPageState extends State<ChatPage> {
       top: false,
       // 面板展开时输入栏紧贴面板（去掉安全区空隙），底部安全区由面板自身处理
       bottom: !_facePanelOpen && !_morePanelOpen,
-      child: Container(
+      child: ListenableBuilder(
+        // 背景切换后底端色同步（与背景层同源同刷）
+        listenable: ChatBackgroundStore.instance,
+        builder: (_, _) => Container(
         // 与聊天背景渐变底端色一致（无缝融入）；深色模式回纯色
-        color: isLight ? const Color(0xFFEDE4D8) : colors.bg,
+        color: isLight
+            ? ChatBackgroundStore.instance.bg.gradient.colors.last
+            : colors.bg,
         // 底部 10 + SafeArea：保证 home indicator 区域不贴边
         padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
         child: Column(
@@ -2218,6 +2232,7 @@ class _ChatPageState extends State<ChatPage> {
           ],
         ),
       ),
+      ),
     );
   }
 
@@ -2249,8 +2264,9 @@ class _ChatPageState extends State<ChatPage> {
   /// 更多（+）面板：照片/拍摄/视频/文件 四宫格。
   Widget _buildMorePanel(ThemeColors colors) {
     final isLight = Theme.of(context).brightness == Brightness.light;
-    final panelColor =
-        isLight ? const Color(0xFFEDE4D8) : colors.bg;
+    final panelColor = isLight
+        ? ChatBackgroundStore.instance.bg.gradient.colors.last
+        : colors.bg;
     final height = MediaQuery.of(context).size.height * 0.32;
     return Container(
       height: height,

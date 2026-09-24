@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../../shared/app_colors.dart';
 import '../../../../shared/app_theme.dart';
 import '../../../../shared/chat_background.dart';
+import '../../../../stores/chat_background_store.dart';
 
 /// 聊天背景预览页（全屏 PageView + 聊天气泡模拟）。
 class ChatBackgroundPreviewPage extends StatefulWidget {
@@ -48,8 +49,10 @@ class _ChatBackgroundPreviewPageState extends State<ChatBackgroundPreviewPage> {
       builder: (ctx) => _SetConfirmDialog(),
     );
     if (confirmed == true && mounted) {
-      // TODO: 保存聊天背景（写入本地持久化 / 调接口）
-      Navigator.of(context).pop(_currentIndex);
+      // 保存聊天背景（store 即时生效 + SP 持久化）
+      await ChatBackgroundStore.instance
+          .set(widget.backgrounds[_currentIndex]);
+      if (mounted) Navigator.of(context).pop(_currentIndex);
     }
   }
 

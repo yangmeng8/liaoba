@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../../shared/app_colors.dart';
 import '../../../../shared/app_theme.dart';
 import '../../../../shared/chat_background.dart';
+import '../../../../stores/chat_background_store.dart';
 import 'chat_background_preview_page.dart';
 
 /// 聊天背景选择页面（九宫格）。
@@ -15,8 +16,20 @@ class ChatBackgroundPickerPage extends StatefulWidget {
 }
 
 class _ChatBackgroundPickerPageState extends State<ChatBackgroundPickerPage> {
-  // 9 张预设聊天背景，默认选中第 0 张
-  int _selectedIndex = 0;
+  // 默认选中当前生效的背景（未选择过为第 0 张）
+  int _selectedIndex = ChatBackgroundStore.instance.bg.id;
+
+  @override
+  void initState() {
+    super.initState();
+    // 直接从"我的"进本页时聊天室可能尚未触发 load，这里幂等恢复一次
+    ChatBackgroundStore.instance.load().then((_) {
+      if (mounted) {
+        setState(
+            () => _selectedIndex = ChatBackgroundStore.instance.bg.id);
+      }
+    });
+  }
 
   /// 点击卡片 → 直接进入全屏预览；
   /// 仅当在预览页点击"设置"并确认后返回，才更新选中项。
