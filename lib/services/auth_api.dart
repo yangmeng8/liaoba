@@ -50,6 +50,17 @@ class AuthApi {
     );
   }
 
+  /// 修改用户密码（旧密码 + 新密码）。
+  static Future<void> updatePassword({
+    required String oldPassword,
+    required String password,
+  }) async {
+    await ApiClient.dio.put(
+      '/app-api/member/user/update-password',
+      data: {'oldPassword': oldPassword, 'password': password},
+    );
+  }
+
   /// 手机 + 验证码 + 密码注册。
   /// 成功返回后端登录结果（userId、accessToken 等），已自动保存到 [AuthManager]。
   static Future<void> smsRegister({

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../../../services/api_client.dart';
+import '../../../../services/auth_api.dart';
 import '../../../../shared/app_colors.dart';
 import '../../../../shared/app_theme.dart';
 import 'reset_password_by_phone_page.dart';
@@ -21,6 +23,9 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
   bool _showNew = false;
   bool _showConfirm = false;
 
+  /// 提交防连点。
+  bool _busy = false;
+
   @override
   void dispose() {
     _oldPasswordController.dispose();
@@ -29,7 +34,8 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
     super.dispose();
   }
 
-  void _submit() {
+  Future<void> _submit() async {
+    if (_busy) return;
     final oldPwd = _oldPasswordController.text.trim();
     final newPwd = _newPasswordController.text.trim();
     final confirmPwd = _confirmPasswordController.text.trim();
@@ -42,9 +48,22 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
       _showToast('两次输入的新密码不一致');
       return;
     }
-    // TODO: 调用修改密码接口
-    _showToast('密码修改成功');
-    Navigator.of(context).pop();
+    if (newPwd.length < 6) {
+      _showToast('新密码至少 6 位');
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      await AuthApi.updatePassword(oldPassword: oldPwd, password: newPwd);
+      if (!mounted) return;
+      _showToast('密码修改成功');
+      Navigator.of(context).pop();
+    } catch (e) {
+      if (!mounted) return;
+      _showToast(ApiClient.errorMessage(e));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   void _showToast(String msg) {
@@ -149,12 +168,21 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
                                     borderRadius: BorderRadius.circular(26),
                                   ),
                                 ),
-                                child: const Text(
-                                  '确认修改',
-                                  style: TextStyle(
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.w600),
-                                ),
+                                child: _busy
+                                    ? const SizedBox(
+                                        width: 22,
+                                        height: 22,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2.5,
+                                          color: Colors.black,
+                                        ),
+                                      )
+                                    : const Text(
+                                        '确认修改',
+                                        style: TextStyle(
+                                            fontSize: 18,
+                                            fontWeight: FontWeight.w600),
+                                      ),
                               ),
                             ),
 
