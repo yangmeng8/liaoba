@@ -163,10 +163,6 @@ class _HomeShellState extends State<HomeShell> {
     final selectedIconColor = AppColors.lime;
     final selectedLabelColor = isDark ? AppColors.lime : colors.text;
     final unselectedColor = colors.muted;
-    // 角标数据源：会话未读（store 补拉/已读本地清零等 notify）
-    // + 好友申请待办数（共享 store，通讯录页与请求中心同源）
-    final totalUnread = _totalUnread;
-    final pendingRequests = RequestBadgeStore.instance.pending;
     return Scaffold(
       body: IndexedStack(index: index, children: pages),
       bottomNavigationBar: ListenableBuilder(
@@ -174,7 +170,12 @@ class _HomeShellState extends State<HomeShell> {
           ConversationStore.instance,
           RequestBadgeStore.instance,
         ]),
-        builder: (context, _) => NavigationBar(
+        // 角标数据源必须在 builder 内读取：store notify 只重建这里，
+        // 在外层 build 求值会捕获旧值（仅切 tab 时才更新数字）。
+        builder: (context, _) {
+          final totalUnread = _totalUnread;
+          final pendingRequests = RequestBadgeStore.instance.pending;
+          return NavigationBar(
           height: 62,
           backgroundColor: tabBarBg,
           elevation: 0,
@@ -213,7 +214,8 @@ class _HomeShellState extends State<HomeShell> {
               label: '我的',
             ),
           ],
-        ),
+        );
+        },
       ),
     );
   }
