@@ -122,6 +122,7 @@ class AuthApi {
   }
 
   /// 重置密码（忘记密码）。成功返回 true。
+  /// [mobile] 要重置的手机号（已登录传当前绑定手机号；未登录传页面输入的手机号）。
   static Future<bool> resetPassword({
     required String mobile,
     required String code,
@@ -129,7 +130,11 @@ class AuthApi {
   }) async {
     final resp = await ApiClient.dio.put(
       '/app-api/member/user/reset-password',
-      data: {'mobile': mobile, 'code': code, 'password': password},
+      data: {
+        'mobile': mobile,
+        'code': code,
+        'password': password,
+      },
     );
     final data = ApiClient.unwrap(resp);
     return data == true;
