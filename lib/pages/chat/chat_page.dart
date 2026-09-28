@@ -333,6 +333,10 @@ class _ChatPageState extends State<ChatPage> {
       final n = AuthManager.instance.nickname;
       if (n != null && n.isNotEmpty) return n;
     }
+    // 私聊只有双方：非自己即对端，用会话标题（好友备注优先，同顶栏显示）
+    if (_isPrivate && userId == widget.targetId && widget.title.isNotEmpty) {
+      return widget.title;
+    }
     return '用户$userId';
   }
 
