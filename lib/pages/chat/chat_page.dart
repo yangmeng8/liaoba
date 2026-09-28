@@ -1500,7 +1500,9 @@ class _ChatPageState extends State<ChatPage> {
   void _maybeMarkRead() {
     int? latestId;
     for (final m in _messages) {
-      if (m.id != null) {
+      // 跳过撤回消息（status=2）：服务端可能拒绝撤回消息 id 作读位，
+      // 改用它前面最近一条有效消息的 id 上报，保证读位可推进。
+      if (m.id != null && !m.recalled) {
         latestId = m.id;
         break;
       }

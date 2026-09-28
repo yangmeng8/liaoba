@@ -553,7 +553,14 @@ class ConversationStore with ChangeNotifier {
       final peerId = entry.key;
       final key = '${ImConversationType.private.value}_$peerId';
       if (_deletedKeys.contains(key)) continue; // 用户已删除该会话
-      final msgs = entry.value;
+      // 过滤撤回信号消息（type=2101，服务端撤回时落库、本身不渲染）：
+      // 信号消息 senderId=撤回方、id 最新、status 正常，不过滤会永久贡献
+      // 1 个未读（读位推不过它，点进聊天室再返回红点也不消），
+      // 摘要也会丢掉原消息的「[消息已撤回]」文案。
+      final msgs = entry.value
+          .where((m) => m.type != ImSystemMessageType.recall)
+          .toList();
+      if (msgs.isEmpty) continue;
       final last = msgs.reduce((a, b) =>
           (a.sendTime ?? DateTime.fromMillisecondsSinceEpoch(0))
                   .isAfter(b.sendTime ?? DateTime.fromMillisecondsSinceEpoch(0))
@@ -561,8 +568,14 @@ class ConversationStore with ChangeNotifier {
               : b);
       final friend = friends[peerId];
       final readId = _readMap[key]?.messageId ?? 0;
-      final unread =
-          msgs.where((m) => m.senderId != me && m.id > readId).length;
+      // 撤回的消息（status=2）不算未读：服务端可能拒收撤回消息 id 作读位
+      // （消息已失效），导致 readId 永远推不过去、红点一直不消。
+      final unread = msgs
+          .where((m) =>
+              m.senderId != me &&
+              m.id > readId &&
+              !m.isRecalled)
+          .length;
 
       result.add(ImConversation(
         type: ImConversationType.private,
@@ -583,7 +596,11 @@ class ConversationStore with ChangeNotifier {
       final groupId = entry.key;
       final key = '${ImConversationType.group.value}_$groupId';
       if (_deletedKeys.contains(key)) continue; // 用户已删除该会话
-      final msgs = entry.value;
+      // 过滤撤回信号消息（同私聊：信号不渲染、不该算未读）。
+      final msgs = entry.value
+          .where((m) => m.type != ImSystemMessageType.recall)
+          .toList();
+      if (msgs.isEmpty) continue;
       final last = msgs.reduce((a, b) =>
           (a.sendTime ?? DateTime.fromMillisecondsSinceEpoch(0))
                   .isAfter(b.sendTime ?? DateTime.fromMillisecondsSinceEpoch(0))
@@ -591,8 +608,13 @@ class ConversationStore with ChangeNotifier {
               : b);
       final group = groups[groupId];
       final readId = _readMap[key]?.messageId ?? 0;
-      final unread =
-          msgs.where((m) => m.senderId != me && m.id > readId).length;
+      // 撤回的消息（status=2）不算未读（同私聊：避免读位推不过去）。
+      final unread = msgs
+          .where((m) =>
+              m.senderId != me &&
+              m.id > readId &&
+              !m.isRecalled)
+          .length;
 
       result.add(ImConversation(
         type: ImConversationType.group,
@@ -612,7 +634,11 @@ class ConversationStore with ChangeNotifier {
       final channelId = entry.key;
       final key = '${ImConversationType.channel.value}_$channelId';
       if (_deletedKeys.contains(key)) continue; // 用户已删除该会话
-      final msgs = entry.value;
+      // 过滤撤回信号消息（同私聊/群聊，防信号算未读）。
+      final msgs = entry.value
+          .where((m) => m.type != ImSystemMessageType.recall)
+          .toList();
+      if (msgs.isEmpty) continue;
       final last = msgs.reduce((a, b) =>
           (a.sendTime ?? DateTime.fromMillisecondsSinceEpoch(0))
                   .isAfter(b.sendTime ?? DateTime.fromMillisecondsSinceEpoch(0))
@@ -621,7 +647,9 @@ class ConversationStore with ChangeNotifier {
       final channel = channels[channelId];
       // 频道为广播消息（无发送人概念），未读 = id 超过读位置的消息数
       final readId = _readMap[key]?.messageId ?? 0;
-      final unread = msgs.where((m) => m.id > readId).length;
+      final unread = msgs
+          .where((m) => m.id > readId && m.type != ImSystemMessageType.recall)
+          .length;
 
       result.add(ImConversation(
         type: ImConversationType.channel,
