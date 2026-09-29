@@ -5,6 +5,7 @@ import 'package:path_provider/path_provider.dart';
 import '../../../services/auth_api.dart';
 import '../../../services/auth_manager.dart';
 import '../../../services/im_websocket.dart';
+import '../../../services/jpush_registration_upload.dart';
 import '../../../shared/app_colors.dart';
 import '../../../shared/app_theme.dart';
 import '../../../shared/group_avatar.dart';
@@ -103,6 +104,11 @@ class _GeneralSettingsPageState extends State<GeneralSettingsPage> {
       builder: (ctx) => _LogoutConfirmDialog(),
     );
     if (confirmed != true || !context.mounted) return;
+
+    // 停用极光推送：消息处理开关在函数第一拍同步关闭（拦住延迟回调），
+    // 其余原生清理（清角标/通知/别名/停止推送）异步进行——
+    // iOS 上清角标等原生调用可能长时间不返回，await 会卡住登出跳转
+    JPushRegistrationUpload.stopPushOnLogout();
 
     // 断开 IM 长连接（置 manualClosed 阻止自动重连）
     ImWebSocket.instance.disconnect();

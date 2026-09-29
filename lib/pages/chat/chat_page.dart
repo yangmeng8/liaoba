@@ -29,6 +29,7 @@ import '../../services/api_client.dart';
 import '../../services/auth_api.dart';
 import '../../services/auth_manager.dart';
 import '../../services/chat_history_cleaner.dart';
+import '../../services/chat_push_service.dart';
 import '../../services/im_api.dart';
 import '../../services/im_websocket.dart';
 import '../../shared/app_colors.dart';
@@ -170,6 +171,10 @@ class _ChatPageState extends State<ChatPage> {
   @override
   void initState() {
     super.initState();
+    // 推送抑制：标记当前会话可见，聊天中收到新消息不弹横幅/通知
+    ChatPushService.instance.markConversationVisible(
+      targetId: widget.targetId.toString(),
+    );
     // 恢复用户选中的聊天背景（外观设置-选择背景图；幂等）
     ChatBackgroundStore.instance.load();
     _scrollCtrl.addListener(_onScroll);
@@ -393,6 +398,10 @@ class _ChatPageState extends State<ChatPage> {
 
   @override
   void dispose() {
+    // 离开聊天页：解除推送抑制（仅当离开的正是当前标记的会话）
+    ChatPushService.instance.markConversationHidden(
+      targetId: widget.targetId.toString(),
+    );
     _wsSub?.cancel();
     _clearSub?.cancel();
     _presenceSub?.cancel();

@@ -28,6 +28,13 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        // 极光推送占位符：JPush SDK AAR 的 meta-data（JPUSH_APPKEY/JPUSH_CHANNEL）
+        // 需要 app 提供替换值；AppKey 需与 lib/main.dart 的 _jpushAppKey 保持一致，
+        // 且包名 com.example.liaoba.im 需在极光后台登记
+        manifestPlaceholders["JPUSH_PKGNAME"] = "com.example.liaoba.im"
+        manifestPlaceholders["JPUSH_APPKEY"] = "d28a97237912f354ef3af622"
+        manifestPlaceholders["JPUSH_CHANNEL"] = "flutter_channel"
     }
 
     buildTypes {

@@ -1,3 +1,7 @@
+import 'dart:async';
+import 'dart:io' show Platform;
+
+import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'pages/contacts/contacts_page.dart';
@@ -10,11 +14,19 @@ import 'pages/messages/messages_page.dart';
 import 'rtc/rtc_controller.dart';
 import 'services/auth_api.dart';
 import 'services/auth_manager.dart';
+import 'services/chat_push_service.dart';
 import 'services/im_websocket.dart';
+import 'services/jpush_registration_upload.dart';
+import 'services/push_service.dart';
 import 'shared/app_colors.dart';
 import 'shared/app_theme.dart';
 import 'shared/font_scale_manager.dart';
 import 'shared/theme_manager.dart';
+
+/// 极光推送 AppKey。
+/// 注意：AppKey 与包名绑定，需在极光后台为本包名（com.example.liaoba.im）
+/// 登记后才可收到推送；否则 getRegistrationID 一直为空。
+const String _jpushAppKey = 'd28a97237912f354ef3af622';
 
 /// 全局导航 Key：接口 401 时从任意页面清栈跳转登录页。
 final GlobalKey<NavigatorState> _rootNavigatorKey =
@@ -36,7 +48,80 @@ Future<void> main() async {
   if (AuthManager.instance.isLoggedIn) {
     AuthApi.loadUserProfile().catchError((Object _) {});
   }
+  await _initPush();
   runApp(const LiaobaApp());
+}
+
+/// 极光推送初始化（迁移自 app_im 的编排顺序，顺序不可随意调整）：
+/// 1. ChatPushService.init（生命周期监听 + Android 点击桥接）
+/// 2. addEventHandler 注册回调（必须先于 setup，否则 Android channel 为 null）
+/// 3. jpush.setup(appKey)
+/// 4. iOS：申请推送权限 + 前台通知交由 AppDelegate 按会话控制 + 重绑通知代理
+/// 5. syncPushStateFromLogin 按本地登录态决定推送处理开关
+/// 6. 已登录则轮询 RegistrationID 并上报后端
+Future<void> _initPush() async {
+  final JPush jpush = JPush();
+  ChatPushService.instance.init(jpush);
+  // 注入全局导航与 Tab 切换（通知点击后跳转消息 tab 用）
+  ChatPushService.instance.attach(
+    navigatorKey: _rootNavigatorKey,
+    switchTab: HomeShell.switchToTab,
+  );
+
+  jpush.addEventHandler(
+    onReceiveNotification: (Map<String, dynamic> message) async {
+      // 通知消息：后台由系统展示；前台 Android 转 App 内横幅，不补本地通知
+      await ChatPushService.instance.handleIncomingPush(
+        message,
+        shouldShowLocalNotification: false,
+        shouldShowInAppBanner: Platform.isAndroid,
+      );
+    },
+    onOpenNotification: (Map<String, dynamic> message) async {
+      ChatPushService.instance.handleNotificationOpened(message);
+      // 点击推送跳转 App 时清除角标数字
+      try {
+        await jpush.clearBadge();
+      } catch (e) {
+        debugPrint('[极光 Push] 点击推送清除角标失败: $e');
+      }
+    },
+    onReceiveMessage: (Map<String, dynamic> message) async {
+      // 自定义消息：仅前台 Android 展示 App 内横幅，不转系统本地通知
+      await ChatPushService.instance.handleIncomingPush(
+        message,
+        shouldShowLocalNotification: false,
+        shouldShowInAppBanner: Platform.isAndroid,
+      );
+    },
+  );
+
+  jpush.setup(
+    appKey: _jpushAppKey,
+    channel: 'flutter_channel',
+    production: kReleaseMode,
+    debug: !kReleaseMode,
+  );
+
+  if (Platform.isIOS) {
+    // iOS 申请推送权限（只弹一次）
+    jpush.applyPushAuthority(
+      const NotificationSettingsIOS(sound: true, alert: true, badge: true),
+    );
+    // iOS 前台通知改由 AppDelegate 按当前会话精确控制显示/隐藏
+    jpush.setUnShowAtTheForeground(unShow: false);
+    await ChatPushService.instance.rebindIOSNotificationDelegate();
+  }
+
+  // 在 Flutter 接收任何推送之前恢复开关，避免旧账号消息被误处理
+  await ChatPushService.instance.syncPushStateFromLogin();
+
+  // 已登录：启动后轮询 RegistrationID 并上报后端（异步不阻塞首帧）
+  if (AuthManager.instance.isLoggedIn) {
+    unawaited(JPushRegistrationUpload.pollAndReportRegistrationIdIfLoggedIn(
+      jpush: jpush,
+    ));
+  }
 }
 
 class LiaobaApp extends StatelessWidget {
@@ -110,6 +195,13 @@ class _MyAppState extends State<MyApp> {
 
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key});
+
+  /// 全局 Tab 切换通知（推送点击等外部场景触发，绕过 setState 层级）。
+  static final ValueNotifier<int> tabNotifier = ValueNotifier<int>(0);
+
+  /// 切换底部 Tab（ChatPushService 注入给推送点击跳转用）。
+  static void switchToTab(int index) => tabNotifier.value = index;
+
   @override
   State<HomeShell> createState() => _HomeShellState();
 }
@@ -127,6 +219,20 @@ class _HomeShellState extends State<HomeShell> {
     ImWebSocket.instance.ensure();
     // 待办角标：进入主框架拉一次（账号切换后重置上个账号的旧值）
     RequestBadgeStore.instance.refresh();
+    // 推送点击通知：切到指定 Tab（如消息 tab）
+    HomeShell.tabNotifier.addListener(_onExternalTabSwitch);
+  }
+
+  @override
+  void dispose() {
+    HomeShell.tabNotifier.removeListener(_onExternalTabSwitch);
+    super.dispose();
+  }
+
+  /// 外部（推送点击）请求切换 Tab。
+  void _onExternalTabSwitch() {
+    if (!mounted) return;
+    setState(() => index = HomeShell.tabNotifier.value);
   }
 
   /// 消息 Tab 未读总数（所有会话未读之和）。

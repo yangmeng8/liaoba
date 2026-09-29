@@ -47,6 +47,13 @@ PODS:
     - Flutter
   - image_picker_ios (0.0.1):
     - Flutter
+  - JCore (5.3.1)
+  - JPush (5.9.0):
+    - JCore (> 5.1.1)
+  - jpush_flutter (0.0.2):
+    - Flutter
+    - JCore (>= 5.2.0)
+    - JPush (= 5.9.0)
   - just_audio (0.0.1):
     - Flutter
     - FlutterMacOS
@@ -101,6 +108,7 @@ DEPENDENCIES:
   - flutter_webrtc (from `.symlinks/plugins/flutter_webrtc/ios`)
   - image_gallery_saver (from `.symlinks/plugins/image_gallery_saver/ios`)
   - image_picker_ios (from `.symlinks/plugins/image_picker_ios/ios`)
+  - jpush_flutter (from `.symlinks/plugins/jpush_flutter/ios`)
   - just_audio (from `.symlinks/plugins/just_audio/darwin`)
   - livekit_client (from `.symlinks/plugins/livekit_client/ios`)
   - mobile_scanner (from `.symlinks/plugins/mobile_scanner/darwin`)
@@ -116,6 +124,8 @@ SPEC REPOS:
   trunk:
     - DKImagePickerController
     - DKPhotoGallery
+    - JCore
+    - JPush
     - libwebp
     - SDWebImage
     - SwiftyGif
@@ -138,6 +148,8 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/image_gallery_saver/ios"
   image_picker_ios:
     :path: ".symlinks/plugins/image_picker_ios/ios"
+  jpush_flutter:
+    :path: ".symlinks/plugins/jpush_flutter/ios"
   just_audio:
     :path: ".symlinks/plugins/just_audio/darwin"
   livekit_client:
@@ -170,6 +182,9 @@ SPEC CHECKSUMS:
   flutter_webrtc: f952258e6fa67477d481cfbad2885a4f117922a7
   image_gallery_saver: 14711d79da40581063e8842a11acf1969d781ed7
   image_picker_ios: e0ece4aa2a75771a7de3fa735d26d90817041326
+  JCore: 3814e38743361bcff5ee86b9f2e417a4b4cbf8ed
+  JPush: 37cb3503ddcc3c76623bd4a6d2cc02cc08a8e415
+  jpush_flutter: 394baee6de632d43482ea40a3cbac932bddab7e1
   just_audio: 4e391f57b79cad2b0674030a00453ca5ce817eed
   libwebp: 02b23773aedb6ff1fd38cec7a77b81414c6842a8
   livekit_client: bf9de63fed5bbbbba717f7995d595ff30c9a8b58

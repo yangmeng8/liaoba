@@ -1,0 +1,211 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'api_client.dart';
+import 'auth_manager.dart';
+import 'chat_push_service.dart';
+import 'push_service.dart';
+
+/// 将极光 [registrationID] 上报后端，供服务端按设备定向推送。
+///
+/// 同一 ID 已成功上报过则跳过；失败不写入本地记录，便于登录后或下次启动重试。
+class JPushRegistrationUpload {
+  JPushRegistrationUpload._();
+
+  static const String _lastUploadedRidKey =
+      'jpush_last_uploaded_registration_id';
+
+  /// 后端上报接口路径（后端提供：/app-api/member/user/getRegistrationID/{rid}；
+  /// 失败仅打印日志不影响功能）。
+  static const String _reportPathPrefix =
+      '/app-api/member/user/getRegistrationID/';
+
+  static bool get _supportsCurrentPlatform =>
+      Platform.isAndroid || Platform.isIOS;
+  static bool _isPollingRegistrationId = false;
+
+  static bool _hasLoginInfo() => AuthManager.instance.isLoggedIn;
+
+  /// 申请通知权限：iOS 弹授权弹窗；Android 13+ 走极光运行时权限请求。
+  static Future<void> requestNotificationPermissionIfNeeded({
+    JPush? jpush,
+  }) async {
+    if (!_supportsCurrentPlatform) return;
+
+    final JPush client = jpush ?? JPush();
+    if (Platform.isIOS) {
+      client.applyPushAuthority(
+        const NotificationSettingsIOS(sound: true, alert: true, badge: true),
+      );
+      return;
+    }
+
+    try {
+      client.requestRequiredPermission();
+      debugPrint('[极光 Push] 已请求 Android 通知权限');
+    } catch (e, st) {
+      debugPrint('[极光 Push] 请求通知权限异常: $e\n$st');
+    }
+  }
+
+  /// 已登录则轮询 RegistrationID（1s 起最多 20 次 × 3s）并上报后端。
+  /// 极光 SDK 初始化异步，rid 可能延迟就绪，故需轮询。
+  static Future<bool> pollAndReportRegistrationIdIfLoggedIn({
+    JPush? jpush,
+    Duration initialDelay = const Duration(seconds: 1),
+    int maxAttempts = 20,
+    Duration retryDelay = const Duration(seconds: 3),
+    bool forceReport = false,
+  }) async {
+    if (!_supportsCurrentPlatform) return false;
+
+    if (!_hasLoginInfo()) {
+      debugPrint('[极光 Push] 当前无登录信息，跳过 RegistrationID 轮询与上报');
+      return false;
+    }
+
+    if (_isPollingRegistrationId) {
+      debugPrint('[极光 Push] RegistrationID 正在同步中，跳过重复轮询');
+      return false;
+    }
+
+    final JPush client = jpush ?? JPush();
+    _isPollingRegistrationId = true;
+    try {
+      await Future<void>.delayed(initialDelay);
+
+      for (var i = 0; i < maxAttempts; i++) {
+        try {
+          final String rid = await client.getRegistrationID();
+          if (rid.isNotEmpty) {
+            debugPrint('[极光 Push] RegistrationID: $rid');
+            await reportRegistrationIdIfNeeded(rid, force: forceReport);
+            return true;
+          }
+          debugPrint('[极光 Push] 第 ${i + 1} 次轮询 RegistrationID 为空');
+        } catch (e, st) {
+          debugPrint('[极光 Push] getRegistrationID 异常: $e\n$st');
+        }
+        await Future<void>.delayed(retryDelay);
+      }
+
+      debugPrint('[极光 Push] RegistrationID 仍为空，请检查推送权限与网络');
+      return false;
+    } finally {
+      _isPollingRegistrationId = false;
+    }
+  }
+
+  static Future<void> reportRegistrationIdIfNeeded(
+    String registrationId, {
+    bool force = false,
+  }) async {
+    if (!_supportsCurrentPlatform) return;
+    if (!_hasLoginInfo()) {
+      debugPrint('[极光 Push] 当前无登录信息，跳过 RegistrationID 上报');
+      return;
+    }
+
+    final String id = registrationId.trim();
+    if (id.isEmpty) return;
+
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    final String? last = prefs.getString(_lastUploadedRidKey);
+    if (!force && last != null && last == id) {
+      return;
+    }
+
+    try {
+      final String path =
+          '$_reportPathPrefix${Uri.encodeComponent(id)}';
+      final response = await ApiClient.dio.get<dynamic>(path);
+      // 校验后端统一返回结构 {code, msg, data}（code != 0 会抛 ApiException）
+      final data = ApiClient.unwrap(response);
+      await prefs.setString(_lastUploadedRidKey, id);
+      debugPrint('[极光 Push] RegistrationID 已上报后端: $id');
+      debugPrint('[极光 Push] 上报接口返回: ${response.data} (data=$data)');
+    } catch (e, st) {
+      debugPrint('[极光 Push] 上报 RegistrationID 异常: $e\n$st');
+    }
+  }
+
+  /// 登录成功后调用：恢复推送处理 → 恢复推送 → 请求通知权限 → force 上报 rid。
+  static Future<bool> ensurePushReadyAfterLogin({
+    JPush? jpush,
+    Duration initialDelay = const Duration(seconds: 1),
+    int maxAttempts = 20,
+    Duration retryDelay = const Duration(seconds: 3),
+  }) async {
+    final JPush client = jpush ?? JPush();
+    await ChatPushService.instance.enablePushHandling();
+    try {
+      await client.resumePush();
+    } catch (e, st) {
+      debugPrint('[极光 Push] 恢复推送异常: $e\n$st');
+    }
+    await requestNotificationPermissionIfNeeded(jpush: client);
+    return pollAndReportRegistrationIdIfLoggedIn(
+      jpush: client,
+      initialDelay: initialDelay,
+      maxAttempts: maxAttempts,
+      retryDelay: retryDelay,
+      forceReport: true,
+    );
+  }
+
+  /// 退出登录时调用：关推送处理 → 清角标/通知 → 清别名/标签 → 停止推送，
+  /// 防止登出后设备仍收到旧账号的推送。
+  ///
+  /// 注意：消息处理开关（[ChatPushService.disablePushHandlingForLogout]）
+  /// 在本函数第一拍同步关闭，可安全地不 await 本函数（登出流程不阻塞）；
+  /// 后续原生调用各自带 3s 超时兜底，防 iOS 清角标等回调不返回导致永久挂起。
+  static Future<void> stopPushOnLogout({JPush? jpush}) async {
+    await ChatPushService.instance.disablePushHandlingForLogout();
+    if (!_supportsCurrentPlatform) return;
+
+    final JPush client = jpush ?? JPush();
+    try {
+      await client
+          .clearBadge()
+          .timeout(const Duration(seconds: 3), onTimeout: () {});
+    } catch (e, st) {
+      debugPrint('[极光 Push] 退出登录清除角标异常: $e\n$st');
+    }
+    try {
+      await client
+          .clearAllNotifications()
+          .timeout(const Duration(seconds: 3), onTimeout: () {});
+    } catch (e, st) {
+      debugPrint('[极光 Push] 退出登录清除通知异常: $e\n$st');
+    }
+    // 清理设备上可能残留的别名/标签，避免服务端仍按旧账号路由推送。
+    try {
+      await client.deleteAlias().timeout(
+            const Duration(seconds: 3),
+            onTimeout: () => <dynamic, dynamic>{},
+          );
+      debugPrint('[极光 Push] 退出登录已清理推送 Alias');
+    } catch (e, st) {
+      debugPrint('[极光 Push] 退出登录清理 Alias 异常: $e\n$st');
+    }
+    try {
+      await client.cleanTags().timeout(
+            const Duration(seconds: 3),
+            onTimeout: () => <dynamic, dynamic>{},
+          );
+      debugPrint('[极光 Push] 退出登录已清理推送 Tags');
+    } catch (e, st) {
+      debugPrint('[极光 Push] 退出登录清理 Tags 异常: $e\n$st');
+    }
+    try {
+      await client
+          .stopPush()
+          .timeout(const Duration(seconds: 3), onTimeout: () {});
+    } catch (e, st) {
+      debugPrint('[极光 Push] 退出登录停用推送异常: $e\n$st');
+    }
+  }
+}

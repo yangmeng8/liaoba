@@ -54,6 +54,7 @@ dependencies:
   video_compress: ^3.1.2
   livekit_client: ^2.12.0
   image_gallery_saver: ^2.0.3
+  jpush_flutter: 3.4.0  # 极光推送（原生侧）；Dart 侧用 lib/services/push_service.dart 自封装（修 onPluginAttached 握手）
 
 dev_dependencies:
   flutter_test:

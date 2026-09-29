@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../main.dart';
 import '../../services/api_client.dart';
 import '../../services/auth_api.dart';
+import '../../services/jpush_registration_upload.dart';
 import '../../shared/app_colors.dart';
 import '../../shared/app_theme.dart';
 import 'register_page.dart';
@@ -132,6 +133,9 @@ class _LoginPageState extends State<LoginPage>
       }
       // 登录成功即拉取用户资料与权限码（昵称/头像/permissions 缓存）
       await AuthApi.loadUserProfile();
+      // 登录成功：恢复推送处理、请求通知权限并强制上报 RegistrationID
+      //（后台静默执行，不阻塞进入首页）
+      unawaited(JPushRegistrationUpload.ensurePushReadyAfterLogin());
       _enterHome();
     } catch (e) {
       _toast(ApiClient.errorMessage(e));
