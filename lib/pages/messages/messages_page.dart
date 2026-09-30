@@ -155,6 +155,12 @@ class _MessagesPageState extends State<MessagesPage> {
   /// 左滑删除会话（单向删除：仅自己不显示，服务端标记 userDeleted=1，
   /// 对方不受影响；新消息到来时服务端重置后会话自动恢复显示）。
   Future<void> _deleteConversation(ImConversation c) async {
+    // 先弹确认弹框，防误触
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => const _DeleteConfirmDialog(),
+    );
+    if (confirmed != true || !mounted) return;
     try {
       await ConversationStore.instance.deleteConversation(c.type, c.targetId);
     } catch (e) {
@@ -211,6 +217,93 @@ class _MessagesPageState extends State<MessagesPage> {
       ),
     );
   }
+}
+
+/// 删除会话确认弹框（与退出登录弹框同风格）。
+class _DeleteConfirmDialog extends StatelessWidget {
+  const _DeleteConfirmDialog();
+
+  @override
+  Widget build(BuildContext context) => Dialog(
+        backgroundColor: context.colors.card,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '提示',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  color: context.colors.text,
+                ),
+              ),
+              const SizedBox(height: 24),
+              Text(
+                '删除后该会话仅从你的消息列表移除，对方不受影响',
+                style: TextStyle(fontSize: 16, color: context.colors.muted),
+              ),
+              const SizedBox(height: 32),
+              Row(
+                children: [
+                  Expanded(
+                    child: SizedBox(
+                      height: 46,
+                      child: ElevatedButton(
+                        onPressed: () => Navigator.of(context).pop(false),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: context.colors.bg,
+                          foregroundColor: context.colors.text,
+                          elevation: 0,
+                          side: BorderSide(color: context.colors.divider),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(23),
+                          ),
+                        ),
+                        child: const Text(
+                          '取消',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: SizedBox(
+                      height: 46,
+                      child: ElevatedButton(
+                        onPressed: () => Navigator.of(context).pop(true),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.lime,
+                          foregroundColor: Colors.black,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(23),
+                          ),
+                        ),
+                        child: const Text(
+                          '确定',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      );
 }
 
 /// 会话条目：头像 + 名称 + 最后一条消息 + 时间 + 未读角标。

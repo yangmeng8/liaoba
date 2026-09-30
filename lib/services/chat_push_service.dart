@@ -468,7 +468,9 @@ class ChatPushService with WidgetsBindingObserver {
 
     final LocalNotification notification = LocalNotification(
       id: notificationId,
-      title: payload.notificationTitle,
+      // 标题固定用 App 名「IM」（通知左侧为 App 图标，
+      // 右侧上行标题、下行正文），正文显示消息内容/兜底文案
+      title: 'IM',
       content: payload.notificationBody,
       fireTime: DateTime.now().add(const Duration(milliseconds: 300)),
       badge: _badgeCount,
