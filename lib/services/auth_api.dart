@@ -220,6 +220,9 @@ class SimpleUser {
   final String nickname;
   final String avatar;
 
+  /// IM 号（member user 的 code）。
+  final String code;
+
   /// 性别（1=男 2=女；0 未设置）。
   final int sex;
   final String deptName;
@@ -228,6 +231,7 @@ class SimpleUser {
     required this.id,
     required this.nickname,
     required this.avatar,
+    this.code = '',
     this.sex = 0,
     this.deptName = '',
   });
@@ -238,6 +242,7 @@ class SimpleUser {
         : int.tryParse('${json['id']}') ?? 0,
     nickname: (json['nickname'] ?? '').toString(),
     avatar: (json['avatar'] ?? '').toString(),
+    code: (json['code'] ?? '').toString(),
     sex: json['sex'] is int ? json['sex'] as int : int.tryParse('${json['sex']}') ?? 0,
     deptName: (json['deptName'] ?? '').toString(),
   );

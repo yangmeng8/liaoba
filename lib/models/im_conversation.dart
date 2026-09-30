@@ -31,6 +31,9 @@ class ImFriend {
   final String nickname;
   final String avatar;
 
+  /// IM 号（member user 的 code；后端 friend/get 下发，空表示未返回）。
+  final String code;
+
   /// 好友是否在线（friend/list 下发；WS FRIEND_ONLINE/OFFLINE 实时更新）。
   final bool online;
 
@@ -56,6 +59,7 @@ class ImFriend {
     required this.status,
     required this.nickname,
     required this.avatar,
+    this.code = '',
     this.online = false,
     this.displayNamePinyin = '',
     this.nicknamePinyin = '',
@@ -74,6 +78,7 @@ class ImFriend {
       status: asInt(json['status']),
       nickname: asString(json['nickname']),
       avatar: asString(json['avatar']),
+      code: asString(json['code']),
       online: asBool(json['online']),
       displayNamePinyin: asString(json['displayNamePinyin']),
       nicknamePinyin: asString(json['nicknamePinyin']),

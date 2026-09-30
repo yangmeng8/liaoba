@@ -90,12 +90,14 @@ class _UserProfilePageState extends State<UserProfilePage> {
           id: widget.userId,
           nickname: AuthManager.instance.nickname ?? '',
           avatar: AuthManager.instance.avatar ?? '',
+          code: AuthManager.instance.imCode ?? '',
         );
       } else if (friend != null) {
         user = SimpleUser(
           id: widget.userId,
           nickname: friend.nickname,
           avatar: friend.avatar,
+          code: friend.code,
         );
       }
       final relation = isSelf
@@ -496,10 +498,12 @@ class _UserProfilePageState extends State<UserProfilePage> {
             ],
           ),
           const SizedBox(height: 6),
-          Text(
-            '账号：${widget.userId}',
-            style: TextStyle(fontSize: 13, color: colors.muted),
-          ),
+          // IM 号（有值才显示；陌生人无数据源、后端未下发 code 时隐藏）
+          if ((_user?.code ?? '').isNotEmpty)
+            Text(
+              'IM号：${_user!.code}',
+              style: TextStyle(fontSize: 13, color: colors.muted),
+            ),
           if ((_user?.deptName ?? '').isNotEmpty) ...[
             const SizedBox(height: 4),
             Text(
