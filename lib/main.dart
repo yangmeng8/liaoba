@@ -206,13 +206,15 @@ class HomeShell extends StatefulWidget {
   State<HomeShell> createState() => _HomeShellState();
 }
 
-class _HomeShellState extends State<HomeShell> {
+class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   int index = 0;
   final pages = const [MessagesPage(), ContactsPage(), MePage()];
 
   @override
   void initState() {
     super.initState();
+    // 回前台补报极光 rid（见 didChangeAppLifecycleState）
+    WidgetsBinding.instance.addObserver(this);
     // 好友在线状态：订阅 WS FRIEND_ONLINE/FRIEND_OFFLINE 推送
     PresenceStore.instance.attach();
     // 进入主框架（登录后）启动 IM 长连接，跨页面复用单条连接
@@ -226,7 +228,18 @@ class _HomeShellState extends State<HomeShell> {
   @override
   void dispose() {
     HomeShell.tabNotifier.removeListener(_onExternalTabSwitch);
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // App 回前台：补报极光 RegistrationID（同一 ID 已上报则内部直接跳过）。
+    // 兜底覆盖冷启动轮询失败、上报时网络异常等漏传场景，确保后端拿得到 rid
+    if (state == AppLifecycleState.resumed) {
+      unawaited(
+          JPushRegistrationUpload.pollAndReportRegistrationIdIfLoggedIn());
+    }
   }
 
   /// 外部（推送点击）请求切换 Tab。

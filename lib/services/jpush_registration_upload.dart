@@ -67,9 +67,13 @@ class JPushRegistrationUpload {
       return false;
     }
 
-    if (_isPollingRegistrationId) {
-      debugPrint('[极光 Push] RegistrationID 正在同步中，跳过重复轮询');
-      return false;
+    // 已有轮询在进行（如启动时的旧轮询，最长 ~61s）：等待其结束再跑本轮，
+    // 避免账号切换后的上报请求被旧轮询的并发锁直接拒绝导致漏传
+    final DateTime waitDeadline =
+        DateTime.now().add(const Duration(seconds: 30));
+    while (_isPollingRegistrationId &&
+        DateTime.now().isBefore(waitDeadline)) {
+      await Future<void>.delayed(const Duration(seconds: 1));
     }
 
     final JPush client = jpush ?? JPush();
@@ -82,10 +86,15 @@ class JPushRegistrationUpload {
           final String rid = await client.getRegistrationID();
           if (rid.isNotEmpty) {
             debugPrint('[极光 Push] RegistrationID: $rid');
-            await reportRegistrationIdIfNeeded(rid, force: forceReport);
-            return true;
+            final bool reported =
+                await reportRegistrationIdIfNeeded(rid, force: forceReport);
+            if (reported) return true;
+            // 拿到 rid 但上报失败（网络异常等）：不提前退出，
+            // 留在轮询循环里每 3s 重试一次上报
+            debugPrint('[极光 Push] 上报未成功，${retryDelay.inSeconds}s 后重试');
+          } else {
+            debugPrint('[极光 Push] 第 ${i + 1} 次轮询 RegistrationID 为空');
           }
-          debugPrint('[极光 Push] 第 ${i + 1} 次轮询 RegistrationID 为空');
         } catch (e, st) {
           debugPrint('[极光 Push] getRegistrationID 异常: $e\n$st');
         }
@@ -99,23 +108,27 @@ class JPushRegistrationUpload {
     }
   }
 
-  static Future<void> reportRegistrationIdIfNeeded(
+  /// 上报 RegistrationID 到后端。
+  ///
+  /// 返回 true 表示已上报成功（或同一 ID 此前已上报过，无需重复）；
+  /// 返回 false 表示上报失败（未写入本地记录，调用方可稍后重试）。
+  static Future<bool> reportRegistrationIdIfNeeded(
     String registrationId, {
     bool force = false,
   }) async {
-    if (!_supportsCurrentPlatform) return;
+    if (!_supportsCurrentPlatform) return false;
     if (!_hasLoginInfo()) {
       debugPrint('[极光 Push] 当前无登录信息，跳过 RegistrationID 上报');
-      return;
+      return false;
     }
 
     final String id = registrationId.trim();
-    if (id.isEmpty) return;
+    if (id.isEmpty) return false;
 
     final SharedPreferences prefs = await SharedPreferences.getInstance();
     final String? last = prefs.getString(_lastUploadedRidKey);
     if (!force && last != null && last == id) {
-      return;
+      return true;
     }
 
     try {
@@ -127,12 +140,17 @@ class JPushRegistrationUpload {
       await prefs.setString(_lastUploadedRidKey, id);
       debugPrint('[极光 Push] RegistrationID 已上报后端: $id');
       debugPrint('[极光 Push] 上报接口返回: ${response.data} (data=$data)');
+      return true;
     } catch (e, st) {
       debugPrint('[极光 Push] 上报 RegistrationID 异常: $e\n$st');
+      return false;
     }
   }
 
   /// 登录成功后调用：恢复推送处理 → 恢复推送 → 请求通知权限 → force 上报 rid。
+  ///
+  /// 首轮轮询（~60s）未完成上报时，自动在 60s 后补一轮，确保 rid 不漏传；
+  /// 仍失败则等 App 回前台（HomeShell lifecycle）兜底补报。
   static Future<bool> ensurePushReadyAfterLogin({
     JPush? jpush,
     Duration initialDelay = const Duration(seconds: 1),
@@ -140,20 +158,38 @@ class JPushRegistrationUpload {
     Duration retryDelay = const Duration(seconds: 3),
   }) async {
     final JPush client = jpush ?? JPush();
-    await ChatPushService.instance.enablePushHandling();
+    // enablePushHandling/resumePush 原生调用在 iOS 上可能挂起不返回
+    //（与登出时 clearBadge 挂死同源），各加 3s 超时兜底，
+    // 防止登录后的 rid 上报被卡死在这两步
+    await ChatPushService.instance
+        .enablePushHandling()
+        .timeout(const Duration(seconds: 3), onTimeout: () {});
     try {
-      await client.resumePush();
+      await client
+          .resumePush()
+          .timeout(const Duration(seconds: 3), onTimeout: () {});
     } catch (e, st) {
       debugPrint('[极光 Push] 恢复推送异常: $e\n$st');
     }
     await requestNotificationPermissionIfNeeded(jpush: client);
-    return pollAndReportRegistrationIdIfLoggedIn(
+    final bool ok = await pollAndReportRegistrationIdIfLoggedIn(
       jpush: client,
       initialDelay: initialDelay,
       maxAttempts: maxAttempts,
       retryDelay: retryDelay,
       forceReport: true,
     );
+    if (!ok) {
+      debugPrint('[极光 Push] 登录后首轮上报未完成，60s 后自动补报一轮');
+      Future<void>.delayed(const Duration(seconds: 60)).then((_) {
+        // 补报前再确认登录态（期间可能已登出）
+        if (!_hasLoginInfo()) return;
+        unawaited(pollAndReportRegistrationIdIfLoggedIn(
+          forceReport: true,
+        ));
+      });
+    }
+    return ok;
   }
 
   /// 退出登录时调用：关推送处理 → 清角标/通知 → 清别名/标签 → 停止推送，
