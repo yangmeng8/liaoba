@@ -14,7 +14,7 @@ import '../../shared/im_avatar.dart';
 import '../chat/chat_page.dart';
 
 /// 我与 TA 的关系（对齐 H5 三态：self / friend / stranger）。
-enum _Relation { self, friend, stranger }
+enum _Relation { self, friend, stranger, blocked }
 
 /// 好友资料页（对齐 H5 friend/detail 三态复用页）：
 /// 聊天室头像、搜索用户、名片、联系人列表都跳这里——
@@ -102,11 +102,14 @@ class _UserProfilePageState extends State<UserProfilePage> {
       }
       final relation = isSelf
           ? _Relation.self
-          : (friend != null && !friend.blocked)
-              ? _Relation.friend
-              : _Relation.stranger;
+          : (friend != null && friend.blocked)
+              ? _Relation.blocked
+              : (friend != null)
+                  ? _Relation.friend
+                  : _Relation.stranger;
       // 好友态：同步置顶状态 + 静默拉当前阅后即焚配置（失败保持默认，不阻塞）
-      if (relation != _Relation.stranger) {
+      //（拉黑态页面只显示资料 + 移除黑名单，不展示好友功能卡片，无需拉取）
+      if (relation == _Relation.friend || relation == _Relation.self) {
         _pinned = ConversationStore.instance
             .isConversationTop(ImConversationType.private, widget.userId);
         try {
@@ -206,6 +209,23 @@ class _UserProfilePageState extends State<UserProfilePage> {
     }
   }
 
+  /// 移除黑名单（拉黑态资料页主按钮，PUT /app-api/im/friend/unblock）。
+  Future<void> _unblock() async {
+    if (_actionRunning) return;
+    setState(() => _actionRunning = true);
+    try {
+      await ImApi.unblockFriend(friendUserId: widget.userId);
+      if (!mounted) return;
+      _showMsg('已移出黑名单');
+      // 拉黑被清除：回到好友态（重新拉取资料/置顶/阅后即焚）
+      await _loadUserInfo();
+    } catch (e) {
+      _showMsg(ApiClient.errorMessage(e));
+    } finally {
+      if (mounted) setState(() => _actionRunning = false);
+    }
+  }
+
   /// 删除好友（红色按钮 + 确认弹窗；删除后返回上一页）。
   Future<void> _deleteFriend() async {
     final confirmed = await showDialog<bool>(
@@ -247,9 +267,11 @@ class _UserProfilePageState extends State<UserProfilePage> {
       if (!mounted) return;
       setState(() {
         _friend = friend;
-        _relation = (friend != null && !friend.blocked)
-            ? _Relation.friend
-            : _Relation.stranger;
+        _relation = (friend != null && friend.blocked)
+            ? _Relation.blocked
+            : (friend != null)
+                ? _Relation.friend
+                : _Relation.stranger;
       });
     } catch (_) {
       // 静默：保持现有展示
@@ -454,6 +476,11 @@ class _UserProfilePageState extends State<UserProfilePage> {
         if (_relation == _Relation.stranger) ...[
           const SizedBox(height: 26),
           _buildAddFriendButton(colors),
+        ],
+        // 拉黑态：只显示资料 + 移除黑名单（对齐微信拉黑用户的资料页）
+        if (_relation == _Relation.blocked) ...[
+          const SizedBox(height: 26),
+          _buildUnblockButton(colors),
         ],
       ],
     );
@@ -688,6 +715,23 @@ class _UserProfilePageState extends State<UserProfilePage> {
         onPressed: _actionRunning ? null : _addFriend,
         icon: const Icon(Icons.person_add_alt_1_outlined, size: 20),
         label: const Text('添加朋友', style: TextStyle(fontSize: 16)),
+      ),
+    );
+  }
+
+  /// 拉黑态：移除黑名单（红色主按钮）。
+  Widget _buildUnblockButton(ThemeColors colors) {
+    return SizedBox(
+      height: 50,
+      child: OutlinedButton.icon(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: Colors.red,
+          side: const BorderSide(color: Colors.redAccent),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        ),
+        onPressed: _actionRunning ? null : _unblock,
+        icon: const Icon(Icons.shield_outlined, size: 20),
+        label: const Text('移除黑名单', style: TextStyle(fontSize: 16)),
       ),
     );
   }
