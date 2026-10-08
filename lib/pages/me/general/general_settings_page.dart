@@ -6,6 +6,7 @@ import '../../../services/auth_api.dart';
 import '../../../services/auth_manager.dart';
 import '../../../services/im_websocket.dart';
 import '../../../services/jpush_registration_upload.dart';
+import '../../../services/version_service.dart';
 import '../../../shared/app_colors.dart';
 import '../../../shared/app_theme.dart';
 import '../../../shared/group_avatar.dart';
@@ -25,10 +26,26 @@ class _GeneralSettingsPageState extends State<GeneralSettingsPage> {
   /// 当前缓存占用（临时目录文件总量），进页计算。
   String _cacheSize = '';
 
+  /// 当前 App 版本号（检查更新 cell 右侧展示）。
+  String _currentVersion = '';
+
   @override
   void initState() {
     super.initState();
     _refreshCacheSize();
+    _refreshCurrentVersion();
+  }
+
+  /// 拉当前版本号（package_info_plus）。
+  Future<void> _refreshCurrentVersion() async {
+    final version = await VersionService.instance.getCurrentVersion();
+    if (!mounted) return;
+    setState(() => _currentVersion = version);
+  }
+
+  /// 手动检查更新（无更新 toast 提示；有更新弹更新框）。
+  Future<void> _checkUpdate() async {
+    await VersionService.instance.checkAndShow(context: context, manual: true);
   }
 
   /// 统计临时目录文件总大小（聊天图片/视频/录音/编辑器等临时产物）。
@@ -201,6 +218,13 @@ class _GeneralSettingsPageState extends State<GeneralSettingsPage> {
                         onTap: () => Navigator.of(context).push(
                           MaterialPageRoute(builder: (_) => const AboutPage()),
                         ),
+                      ),
+                      _SettingRow(
+                        title: '检查更新',
+                        // 右侧显示当前版本号
+                        trailing:
+                            _currentVersion.isEmpty ? '—' : 'v$_currentVersion',
+                        onTap: _checkUpdate,
                       ),
                       _SettingRow(
                         title: '清理缓存',

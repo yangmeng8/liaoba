@@ -18,6 +18,7 @@ import 'services/chat_push_service.dart';
 import 'services/im_websocket.dart';
 import 'services/jpush_registration_upload.dart';
 import 'services/push_service.dart';
+import 'services/version_service.dart';
 import 'shared/app_colors.dart';
 import 'shared/app_theme.dart';
 import 'shared/font_scale_manager.dart';
@@ -43,6 +44,8 @@ Future<void> main() async {
   // 注入 RTC 全局导航 Key（来电信令自动拉起通话页）；
   // 触发 RtcController 单例构造，启动 WebSocket 信令监听
   RtcController.instance.navigatorKey = _rootNavigatorKey;
+  // 注入版本更新全局导航 Key（进主框架自动检查时弹更新框）
+  VersionService.instance.navigatorKey = _rootNavigatorKey;
   // 恢复登录态后补拉用户资料与权限码（昵称/头像/permissions 缓存；
   // 异步执行不阻塞首帧，401 时会自动跳登录页）
   if (AuthManager.instance.isLoggedIn) {
@@ -221,6 +224,12 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     ImWebSocket.instance.ensure();
     // 待办角标：进入主框架拉一次（账号切换后重置上个账号的旧值）
     RequestBadgeStore.instance.refresh();
+    // 版本更新：进主框架延迟 2s 自动检查（等页面就绪；
+    // 无更新静默，有更新弹框，强制更新不可关闭）
+    Future<void>.delayed(const Duration(seconds: 2)).then((_) {
+      if (!mounted) return;
+      unawaited(VersionService.instance.checkAndShow());
+    });
     // 推送点击通知：切到指定 Tab（如消息 tab）
     HomeShell.tabNotifier.addListener(_onExternalTabSwitch);
   }
