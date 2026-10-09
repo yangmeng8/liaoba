@@ -17,6 +17,8 @@
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
 		A0596852CBDB05B1852BA201 /* Pods_Runner.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6CBC8391F10F8EAC6039A940 /* Pods_Runner.framework */; };
+		B7A1C0D2E3F4051627384950 /* push_notification.caf in Resources */ = {isa = PBXBuildFile; fileRef = B7A1C0D1E3F4051627384950 /* push_notification.caf */; };
+				B7A1C0D4E3F4051627384950 /* ringback.caf in Resources */ = {isa = PBXBuildFile; fileRef = B7A1C0D3E3F4051627384950 /* ringback.caf */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -67,6 +69,8 @@
 		C4E45C39B035751C6891D813 /* Pods-RunnerTests.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-RunnerTests.release.xcconfig"; path = "Target Support Files/Pods-RunnerTests/Pods-RunnerTests.release.xcconfig"; sourceTree = "<group>"; };
 		ECAFC3B049978BD7057BAC36 /* Pods_RunnerTests.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_RunnerTests.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		F25B846A62C61BCE19153506 /* Pods-Runner.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.release.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.release.xcconfig"; sourceTree = "<group>"; };
+		B7A1C0D1E3F4051627384950 /* push_notification.caf */ = {isa = PBXFileReference; lastKnownFileType = audio.caf; path = push_notification.caf; sourceTree = "<group>"; };
+				B7A1C0D3E3F4051627384950 /* ringback.caf */ = {isa = PBXFileReference; lastKnownFileType = audio.caf; path = ringback.caf; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -150,6 +154,8 @@
 				74858FAE1ED2DC5600515810 /* AppDelegate.swift */,
 				7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */,
 				74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */,
+				B7A1C0D1E3F4051627384950 /* push_notification.caf */,
+								B7A1C0D3E3F4051627384950 /* ringback.caf */,
 			);
 			path = Runner;
 			sourceTree = "<group>";
@@ -266,6 +272,8 @@
 				3B3967161E833CAA004F5970 /* AppFrameworkInfo.plist in Resources */,
 				97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */,
 				97C146FC1CF9000F007C117D /* Main.storyboard in Resources */,
+				B7A1C0D2E3F4051627384950 /* push_notification.caf in Resources */,
+								B7A1C0D4E3F4051627384950 /* ringback.caf in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

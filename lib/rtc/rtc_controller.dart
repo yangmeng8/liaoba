@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show MethodCall, MethodChannel;
 
 import '../models/im_ws_frame.dart';
 import '../pages/call/call_page.dart';
@@ -61,10 +63,14 @@ class RtcParticipantStatus {
 /// - createCall 返回后二次校验（防期间来电插入的竞态）
 /// - finishCall 幂等（收尾只跑一次，本地挂断 vs 远端结束区分）
 /// - WebSocket 信令驱动被叫与状态流转。
-class RtcController extends ChangeNotifier {
+class RtcController extends ChangeNotifier with WidgetsBindingObserver {
   RtcController._() {
     // 全局信令监听：RTC 帧到达即分发（登录后 WS 建立即可收来电）
     _wsSub = ImWebSocket.instance.notificationStream.listen(_onNotification);
+    // 前后台监听：后台收到来电信令时发 fullScreenIntent 通知拉起
+    WidgetsBinding.instance.addObserver(this);
+    // iOS CallKit 事件桥（VoIP 推送来电/系统界面接听拒接）
+    _callkitChannel.setMethodCallHandler(_onCallkitEvent);
     // LiveKit 远端断开 → 通话收尾（主动挂断时回调已被清空，不误触）
     liveKit.onDisconnected = () {
       if (_stage == RtcStage.running) {
@@ -102,6 +108,9 @@ class RtcController extends ChangeNotifier {
 
   /// 收尾幂等标记。
   bool _finishing = false;
+
+  /// App 是否在前台（后台收到来电信令时发 fullScreenIntent 全屏通知）。
+  bool _isAppForeground = true;
 
   /// 通话结束原因文案（退出前展示）。
   String endToast = '';
@@ -172,6 +181,7 @@ class RtcController extends ChangeNotifier {
         // 私聊对方已在线即刻接听（多端场景）
         await _enterRunning(autoConnect: true);
       } else {
+        _startRingback(); // 私聊等待接听：回铃音（嘟—嘟—）
         // 私聊：INVITING 即预连 LiveKit 房间（对齐 H5 connectRoom 行为），
         // 对方接听进房时靠 LiveKit ParticipantConnected 本地事件感知接通
         // ——不依赖服务端 webhook；1602 信令到达时双保险重连
@@ -247,6 +257,7 @@ class RtcController extends ChangeNotifier {
     final userId = asInt(payload['userId']);
     if (room.isEmpty || userId == myUserId || userId <= 0) return;
     if (_stage == RtcStage.inviting && call?.room == room) {
+      _stopRingback(); // 对方接听：停回铃音
       _enterRunning(autoConnect: true);
     }
   }
@@ -289,6 +300,58 @@ class RtcController extends ChangeNotifier {
     }
   }
 
+  /// 推送点击路径的来电补入（好友不在 App 前台/被杀时 WS 信令丢失，
+  /// 点击极光「来电通知」后由此补入信令直接弹来电页）。
+  ///
+  /// [raw] 为推送 extras 里后端约定的 RTC 信令字段（msgType=rtc_call）：
+  /// room/mediaType/inviterUserId/inviterNickname/inviterAvatar/inviteeIds 等。
+  /// 接听/拒绝走 HTTP API（RtcApi），不依赖 WS；主叫取消仍由 WS 消息兜底。
+  void handleIncomingFromPush(Map<String, dynamic> raw) {
+    final normalized = Map<String, dynamic>.from(raw);
+    // 后端实际字段适配：roomId → room（extras 顶层两种命名都兼容）
+    final dynamic roomValue =
+        normalized['room'] ?? normalized['roomId'] ?? normalized['roomIdStr'];
+    normalized['room'] = roomValue?.toString() ?? '';
+    // 推送 extras 的值可能是字符串：inviteeIds 可能是 "[123]"，status 可能是 "0"
+    final dynamic inviteeIds = normalized['inviteeIds'];
+    if (inviteeIds is String && inviteeIds.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(inviteeIds);
+        if (decoded is List) normalized['inviteeIds'] = decoded;
+      } catch (_) {
+        // 非 JSON：忽略
+      }
+    }
+    // 后端推送未带 inviteeIds（按 registration_id 定向发给被叫）：
+    // 填充本人 id 通过 _receiveSignal 的被叫身份校验
+    if (normalized['inviteeIds'] == null) {
+      normalized['inviteeIds'] = <int>[AuthManager.instance.userId ?? 0];
+    }
+    // 昵称缺失：来电页兜底显示「对方」
+    if ((normalized['inviterNickname'] ?? '').toString().trim().isEmpty) {
+      normalized['inviterNickname'] = '对方';
+    }
+    // 推送 extras 不带 status：补 INVITING(10) 走来电分支
+    if (int.tryParse('${normalized['status'] ?? ''}') == null) {
+      normalized['status'] = RtcParticipantStatus.inviting;
+    }
+    final RtcSignalPayload signal;
+    try {
+      signal = RtcSignalPayload.fromPayload(normalized);
+    } catch (e) {
+      debugPrint('[RTC] 推送来电信令解析失败：$e（raw=$raw）');
+      return;
+    }
+    if (signal.room.isEmpty) {
+      debugPrint('[RTC] 推送来电缺少房间号，忽略');
+      return;
+    }
+    debugPrint('[RTC] 推送来电补入: room=${signal.room}, '
+        'inviter=${signal.inviterNickname}(${signal.inviterUserId}), '
+        'mediaType=${signal.mediaType}');
+    _receiveSignal(signal);
+  }
+
   /// 信令处理（对齐 H5 receiveSignal；后端 1601 仅推 INVITING/REJECTED/NO_ANSWER：
   /// 私聊拒绝/超时不走此信令，由 RTC_CALL_END 消息兜底；接通感知靠 1602）。
   void _receiveSignal(RtcSignalPayload signal) {
@@ -307,6 +370,7 @@ class RtcController extends ChangeNotifier {
         }
         incomingSignal = signal;
         _stage = RtcStage.incoming;
+        _startRingtone(); // 被叫：来电页弹出即振铃（前台无通知声，App 内补）
         notifyListeners();
         _openCallPage();
         break;
@@ -338,6 +402,8 @@ class RtcController extends ChangeNotifier {
   Future<void> _enterRunning({required bool autoConnect}) async {
     final data = call;
     if (data == null) return;
+    _stopRingback(); // 接通：停主叫回铃音
+    _stopRingtone(); // 接通：停被叫振铃音
     _noAnswerTimer?.cancel();
     _noAnswerTimer = null;
     // 幂等：LiveKit 事件与 1602 信令双通道可能都触发，只在首次切换起计时
@@ -399,6 +465,14 @@ class RtcController extends ChangeNotifier {
     _finishing = true;
     _noAnswerTimer?.cancel();
     _noAnswerTimer = null;
+    // 清掉 Android 来电全屏通知（拒接/取消/对方挂断时）
+    _cancelFullScreenIncomingCall();
+    _stopRingback(); // 结束通话：停回铃音（幂等）
+    _stopRingtone(); // 结束通话：停振铃音（拒接/超时/取消，幂等）
+    // iOS：同步结束 CallKit 系统来电界面（对方挂断/超时/取消）
+    if (Platform.isIOS) {
+      unawaited(_callkitChannel.invokeMethod('endCall').catchError((Object _) {}));
+    }
     if (toast != null && toast.isNotEmpty) {
       endToast = toast;
     } else if (localEnd) {
@@ -428,11 +502,168 @@ class RtcController extends ChangeNotifier {
   /// 通话页路由名（防重复 push 检测用）。
   static const String callPageRouteName = '/rtc-call';
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _isAppForeground = state == AppLifecycleState.resumed;
+  }
+
+  /// Android fullScreenIntent 来电全屏通知 channel（MainActivity 实现）。
+  static const MethodChannel _incomingCallChannel =
+      MethodChannel('im/incoming_call');
+
+  /// iOS CallKit 事件桥（AppDelegate 实现）。
+  static const MethodChannel _callkitChannel = MethodChannel('im/callkit');
+
+  /// 回铃音：主叫等待接听时播放（iOS 走 callkit channel / Android 走 incoming_call channel）
+  void _startRingback() {
+    if (Platform.isIOS) {
+      unawaited(
+          _callkitChannel.invokeMethod('startRingback').catchError((_) {}));
+    } else if (Platform.isAndroid) {
+      unawaited(
+          _incomingCallChannel.invokeMethod('startRingback').catchError((_) {}));
+    }
+  }
+
+  void _stopRingback() {
+    if (Platform.isIOS) {
+      unawaited(
+          _callkitChannel.invokeMethod('stopRingback').catchError((_) {}));
+    } else if (Platform.isAndroid) {
+      unawaited(
+          _incomingCallChannel.invokeMethod('stopRingback').catchError((_) {}));
+    }
+  }
+
+  /// 振铃音：被叫来电页弹出时循环播放（App 在前台时 WS 直接弹页无通知声）。
+  void _startRingtone() {
+    if (Platform.isIOS) {
+      unawaited(
+          _callkitChannel.invokeMethod('startRingtone').catchError((_) {}));
+    } else if (Platform.isAndroid) {
+      unawaited(
+          _incomingCallChannel.invokeMethod('startRingtone').catchError((_) {}));
+    }
+  }
+
+  void _stopRingtone() {
+    if (Platform.isIOS) {
+      unawaited(
+          _callkitChannel.invokeMethod('stopRingtone').catchError((_) {}));
+    } else if (Platform.isAndroid) {
+      unawaited(
+          _incomingCallChannel.invokeMethod('stopRingtone').catchError((_) {}));
+    }
+  }
+
+  /// 上报 iOS VoIP Token 给后端（同 token 只报一次；接口未上线时静默容错）。
+  static const String _voipTokenReportPath =
+      '/app-api/member/user/updateVoipToken';
+  static String? _lastReportedVoipToken;
+
+  Future<void> _reportVoipToken(String token) async {
+    if (token == _lastReportedVoipToken) return; // 同 token 不重复上报
+    _lastReportedVoipToken = token;
+    debugPrint('[RTC] iOS VoIP Token(${token.length}字符): $token');
+    try {
+      final resp = await ApiClient.dio.put<Object>(
+        '$_voipTokenReportPath?voipToken=$token',
+      );
+      debugPrint('[RTC] VoIP Token 上报返回: ${resp.data}');
+    } catch (e) {
+      // 接口未上线（404 等）不重试不刷屏；后端就绪后下次启动会重新上报
+      debugPrint('[RTC] VoIP Token 上报失败（接口待后端上线）: $e');
+    }
+  }
+
+  /// iOS CallKit 事件：VoIP token / 来电 / 系统界面接听 / 拒接。
+  Future<dynamic> _onCallkitEvent(MethodCall call) async {
+    if (call.method != 'onCallkitEvent') return null;
+    final args = Map<String, dynamic>.from(call.arguments as Map? ?? {});
+    final event = args['event'] as String? ?? '';
+    final payload =
+        Map<String, dynamic>.from(args['payload'] as Map? ?? <String, dynamic>{});
+    switch (event) {
+      case 'voipToken':
+        // VoIP deviceToken 上报后端（后端用 VoIP 证书直连 APNs 发起来电推送；
+        // 接口路径待后端确认，404/未实现时静默容错）
+        final token = args['token'] as String? ?? '';
+        if (token.isNotEmpty) {
+          unawaited(_reportVoipToken(token));
+        }
+        break;
+      case 'incoming':
+        // VoIP 推送到达：系统 CallKit 界面已弹，同步补入 App 内来电页
+        handleIncomingFromPush(payload);
+        break;
+      case 'answer':
+        // 用户在系统来电界面点「接听」（App 已被带回前台）
+        if (_stage == RtcStage.incoming) {
+          await accept();
+        } else {
+          // 冷启动竞态：来电页尚未建立 → 先补入再接听
+          handleIncomingFromPush(payload);
+          if (_stage == RtcStage.incoming) await accept();
+        }
+        break;
+      case 'reject':
+        // 用户在系统来电界面点「拒接」
+        if (_stage == RtcStage.incoming) {
+          await hangup();
+        }
+        break;
+    }
+    return null;
+  }
+
+  /// 后台收到来电信令：发 fullScreenIntent 通知（锁屏直接全屏弹来电界面）。
+  /// extras 与后端极光推送约定同构（messageType=call_invite），
+  /// 全屏拉起后走 push_open 冷启动消费链路识别进来电页。
+  void _showFullScreenIncomingCall() {
+    final signal = incomingSignal;
+    if (signal == null) return;
+    final callType = signal.mediaType == 2 ? '视频' : '语音';
+    unawaited(
+      _incomingCallChannel.invokeMethod<void>('showIncomingCall', <String, dynamic>{
+        'title': 'IM',
+        'content': '$signal.inviterNickname 邀请你$callType通话',
+        'extrasJson': jsonEncode(<String, dynamic>{
+          'messageType': 'call_invite',
+          'roomId': signal.room,
+          'conversationType': signal.conversationType,
+          'mediaType': signal.mediaType,
+          'inviterUserId': signal.inviterUserId,
+          'inviterNickname': signal.inviterNickname,
+          'inviterAvatar': signal.inviterAvatar,
+          'needNotify': true,
+          '_j_msgid': 'call_${signal.room}',
+        }),
+      }).catchError((Object e) {
+        debugPrint('[RTC] 发送来电全屏通知失败: $e');
+      }),
+    );
+  }
+
+  /// 清掉来电全屏通知（通话结束/拒接/取消时）。
+  void _cancelFullScreenIncomingCall() {
+    if (Platform.isIOS) return;
+    unawaited(
+      _incomingCallChannel.invokeMethod<void>('cancelIncomingCall')
+          .catchError((Object _) {}),
+    );
+  }
+
   void _openCallPage() {
     final key = navigatorKey;
     if (key == null) return;
     final nav = key.currentState;
     if (nav == null) return;
+    // App 在后台（WS 还存活的时间窗内收到来电信令）：
+    // Android 发 fullScreenIntent 通知——锁屏直接全屏弹来电界面，
+    // 亮屏显示 heads-up；点击/全屏拉起后复用 push_open 链路进来电页
+    if (!_isAppForeground && !Platform.isIOS) {
+      _showFullScreenIncomingCall();
+    }
     // 已有通话页在栈中则不重复 push（重建由 ListenableBuilder 响应）
     var exists = false;
     nav.popUntil((route) {

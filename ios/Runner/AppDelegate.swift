@@ -1,4 +1,7 @@
+import AVFoundation
+import CallKit
 import Flutter
+import PushKit
 import UIKit
 import UserNotifications
 
@@ -15,20 +18,87 @@ import UserNotifications
   private var activeTargetId: String?
   private let notificationVisibilityChannelName = "im/notification_visibility"
 
+  // MARK: - VoIP Push + CallKit（iOS 系统级全屏来电）
+  private let callkitChannelName = "im/callkit"
+  private var callkitChannel: FlutterMethodChannel?
+  private var callProvider: CXProvider?
+  private var voipRegistry: PKPushRegistry?
+  private var currentCallUuid: UUID?
+  private var currentCallPayload: [String: Any] = [:]
+  /// engine 未就绪时缓存的 CallKit 事件（冷启动点接听：incoming → answer 依次入队）
+  private var pendingCallkitEvents: [[String: Any]] = []
+
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
-    // 注册推送通知权限（应用级生命周期，仍可在 didFinishLaunching 中处理）
+    let result = super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    // 注册推送通知权限（普通 APNs，与 PushKit VoIP 并行）
     _registerForRemoteNotifications(application)
-    // 插件注册已迁移至 didInitializeImplicitFlutterEngine（UIScene 启动顺序要求）
-    return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    // PushKit 注册放在 super 之后（Flutter implicit engine 场景的启动时序更稳）
+    _setupCallKit()
+    _setupVoipPush()
+    return result
   }
 
   /// UIScene 生命周期下，在此注册 Flutter 插件（见 flutter.dev/to/uiscene-migration）
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
     _rebindNotificationDelegate(reason: "didInitializeImplicitFlutterEngine")
+    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "CallKitChannel") {
+      let channel = FlutterMethodChannel(
+        name: callkitChannelName,
+        binaryMessenger: registrar.messenger()
+      )
+      channel.setMethodCallHandler { [weak self] call, result in
+        guard let self = self else {
+          result(nil)
+          return
+        }
+        switch call.method {
+        case "endCall":
+          // Flutter 侧通话结束（对方挂断/超时/取消）→ 同步结束 CallKit 界面
+          if let uuid = self.currentCallUuid {
+            // iOS 26 SDK：reportCallEnded 改名 reportCall(with:endedAt:reason:)
+            self.callProvider?.reportCall(
+              with: uuid,
+              endedAt: nil,
+              reason: CXCallEndedReason.remoteEnded
+            )
+          }
+          self.currentCallUuid = nil
+          self.currentCallPayload = [:]
+          self._playRingback(false)
+          result(nil)
+        case "startRingback":
+          self._playRingback(true)
+          result(nil)
+        case "stopRingback":
+          self._playRingback(false)
+          result(nil)
+        case "startRingtone":
+          self._playRingtone(true)
+          result(nil)
+        case "stopRingtone":
+          self._playRingtone(false)
+          result(nil)
+        default:
+          result(FlutterMethodNotImplemented)
+        }
+      }
+      callkitChannel = channel
+      // 冷启动缓存事件 flush（按序：incoming → answer/reject）
+      if !pendingCallkitEvents.isEmpty {
+        let events = pendingCallkitEvents
+        pendingCallkitEvents.removeAll()
+        DispatchQueue.main.async {
+          for event in events {
+            channel.invokeMethod("onCallkitEvent", arguments: event)
+          }
+        }
+        print("[CallKit] 已 flush 缓存事件 \(events.count) 条")
+      }
+    }
     if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "NotificationVisibilityChannel") {
       let channel = FlutterMethodChannel(
         name: notificationVisibilityChannelName,
@@ -291,5 +361,207 @@ import UserNotifications
       }
     }
     return nil
+  }
+
+  // MARK: - VoIP Push + CallKit 实现
+
+  /// CallKit Provider：锁屏全屏来电界面 + 系统接听/拒接按钮
+  /// 回铃音播放器（主叫等待接听时循环播放）
+  private var ringbackPlayer: AVAudioPlayer?
+
+  /// 播放/停止回铃音（主叫等待接听）
+  private func _playRingback(_ play: Bool) {
+    if play {
+      if ringbackPlayer?.isPlaying == true {
+        return
+      }
+      guard let url = Bundle.main.url(forResource: "ringback", withExtension: "caf") else {
+        print("[Ringback] 资源未找到")
+        return
+      }
+      do {
+        try AVAudioSession.sharedInstance().setCategory(.playback)
+        try AVAudioSession.sharedInstance().setActive(true)
+        ringbackPlayer = try AVAudioPlayer(contentsOf: url)
+        ringbackPlayer?.numberOfLoops = -1 // 循环：1 秒嘟 + 3 秒静音
+        ringbackPlayer?.play()
+        print("[Ringback] 回铃音开始")
+      } catch {
+        print("[Ringback] 播放失败: \(error.localizedDescription)")
+      }
+    } else {
+      ringbackPlayer?.stop()
+      ringbackPlayer = nil
+      print("[Ringback] 回铃音停止")
+    }
+  }
+
+  /// 振铃音播放器（被叫来电页弹出时循环播放）
+  private var ringtonePlayer: AVAudioPlayer?
+
+  /// 播放/停止被叫振铃音（复用来电铃声资源 push_notification.caf）
+  private func _playRingtone(_ play: Bool) {
+    if play {
+      if ringtonePlayer?.isPlaying == true {
+        return
+      }
+      guard let url = Bundle.main.url(forResource: "push_notification", withExtension: "caf") else {
+        print("[Ringtone] 资源未找到")
+        return
+      }
+      do {
+        try AVAudioSession.sharedInstance().setCategory(.playback)
+        try AVAudioSession.sharedInstance().setActive(true)
+        ringtonePlayer = try AVAudioPlayer(contentsOf: url)
+        ringtonePlayer?.numberOfLoops = -1
+        ringtonePlayer?.play()
+        print("[Ringtone] 振铃音开始")
+      } catch {
+        print("[Ringtone] 播放失败: \(error.localizedDescription)")
+      }
+    } else {
+      ringtonePlayer?.stop()
+      ringtonePlayer = nil
+      print("[Ringtone] 振铃音停止")
+    }
+  }
+
+  private func _setupCallKit() {
+    let config: CXProviderConfiguration
+    if #available(iOS 14.0, *) {
+      config = CXProviderConfiguration()
+    } else {
+      config = CXProviderConfiguration(localizedName: "IM")
+    }
+    config.supportsVideo = true
+    config.includesCallsInRecents = false
+    config.ringtoneSound = "push_notification.caf"
+    let provider = CXProvider(configuration: config)
+    provider.setDelegate(self, queue: nil)
+    callProvider = provider
+    print("[CallKit] CXProvider 已初始化")
+  }
+
+  /// PushKit VoIP 注册：拿到 VoIP deviceToken（上报 Flutter→后端）
+  private func _setupVoipPush() {
+    let registry = PKPushRegistry(queue: .main)
+    registry.delegate = self
+    registry.desiredPushTypes = [.voIP]
+    voipRegistry = registry
+    print("[CallKit] PushKit VoIP 已注册")
+  }
+
+  /// 原生 → Flutter 事件（engine 未就绪时缓存，ready 后 flush）
+  private func _sendToFlutter(_ event: [String: Any]) {
+    if let channel = callkitChannel {
+      DispatchQueue.main.async {
+        channel.invokeMethod("onCallkitEvent", arguments: event)
+      }
+    } else {
+      pendingCallkitEvents.append(event)
+      print("[CallKit] engine 未就绪，缓存事件: \(event["event"] ?? "")")
+    }
+  }
+
+  /// 从 VoIP push payload 多层结构解析来电信令（顶层/aps/extras 嵌套）
+  private func _parseCallPayload(_ userInfo: [AnyHashable: Any]) -> [String: Any] {
+    let raw = _asStringKeyedDictionary(userInfo)
+    let aps = _asMap(raw["aps"])
+    let extras = _asMap(raw["extras"])
+    let sources = [raw, aps, extras, _asMap(raw["payload"])]
+    var data: [String: Any] = [:]
+    if let v = _readString(from: sources, keys: ["roomId", "room"]) { data["roomId"] = v }
+    if let v = _readString(from: sources, keys: ["messageType", "msgType"]) { data["messageType"] = v }
+    if let v = _readString(from: sources, keys: ["inviterUserId"]) { data["inviterUserId"] = v }
+    if let v = _readString(from: sources, keys: ["inviterNickname", "nickname", "senderName"]) { data["inviterNickname"] = v }
+    if let v = _readString(from: sources, keys: ["inviterAvatar", "avatar"]) { data["inviterAvatar"] = v }
+    if let v = _readString(from: sources, keys: ["mediaType"]) { data["mediaType"] = v }
+    if let v = _readString(from: sources, keys: ["conversationType"]) { data["conversationType"] = v }
+    return data
+  }
+}
+
+// MARK: - PKPushRegistryDelegate（VoIP 推送到达 → CallKit 上报来电）
+extension AppDelegate: PKPushRegistryDelegate {
+  func pushRegistry(_ registry: PKPushRegistry, didUpdate pushCredentials: PKPushCredentials, for type: PKPushType) {
+    let token = pushCredentials.token.map { String(format: "%02.2hhx", $0) }.joined()
+    print("[CallKit] VoIP Token(\(token.count)字符): \(token)")
+    _sendToFlutter(["event": "voipToken", "token": token])
+  }
+
+  /// 诊断：VoIP token 失效回调（注册被系统拒绝时触发）
+  func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
+    print("[CallKit] ❌ VoIP Token 失效（注册被系统拒绝）: type=\(type.rawValue)")
+  }
+
+  func pushRegistry(
+    _ registry: PKPushRegistry,
+    didReceiveIncomingPushWith payload: [AnyHashable: Any],
+    for type: PKPushType,
+    completion: @escaping () -> Void
+  ) {
+    print("[CallKit] 收到 VoIP 推送: \(payload)")
+    let data = _parseCallPayload(payload)
+    guard let roomId = data["roomId"] as? String, !roomId.isEmpty else {
+      // 非来电 VoIP 推送：直接放行（苹果要求 report，但极光仅来电场景发 VoIP）
+      print("[CallKit] VoIP 推送缺少 roomId，忽略")
+      completion()
+      return
+    }
+    currentCallUuid = UUID()
+    currentCallPayload = data
+    let uuid = currentCallUuid!
+    let update = CXCallUpdate()
+    let nickname = (data["inviterNickname"] as? String) ?? "IM"
+    update.remoteHandle = CXHandle(type: .generic, value: nickname)
+    update.localizedCallerName = nickname
+    let mediaType = Int(data["mediaType"] as? String ?? "") ?? 1
+    update.hasVideo = mediaType == 2
+    callProvider?.reportNewIncomingCall(with: uuid, update: update) { error in
+      if let error = error {
+        print("[CallKit] 上报来电失败: \(error.localizedDescription)")
+      } else {
+        print("[CallKit] 系统来电界面已弹出: \(nickname) roomId=\(roomId)")
+      }
+      // PushKit completion 必须在 reportNewIncomingCall 回调后调用（苹果红线）
+      completion()
+    }
+    // 通知 Flutter 弹 App 内来电页（CallKit 接听后直接进通话）
+    _sendToFlutter(["event": "incoming", "payload": data])
+  }
+}
+
+// MARK: - CXProviderDelegate（系统来电界面的接听/拒接回调）
+extension AppDelegate: CXProviderDelegate {
+  /// 用户点「接听」：App 自动回前台，通知 Flutter 执行接听
+  func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
+    print("[CallKit] 用户点击接听")
+    _sendToFlutter(["event": "answer", "payload": currentCallPayload])
+    action.fulfill()
+  }
+
+  /// 用户点「拒接」/「挂断」：通知 Flutter 拒绝
+  func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
+    print("[CallKit] 用户点击拒接/挂断")
+    _sendToFlutter(["event": "reject", "payload": currentCallPayload])
+    action.fulfill()
+    currentCallUuid = nil
+    currentCallPayload = [:]
+  }
+
+  func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
+    // LiveKit 自管音频会话，无需处理
+  }
+
+  func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {
+  }
+
+  func provider(_ provider: CXProvider, timedOutPerforming action: CXAction) {
+    action.fulfill()
+  }
+
+  func providerDidReset(_ provider: CXProvider) {
+    currentCallUuid = nil
+    currentCallPayload = [:]
   }
 }

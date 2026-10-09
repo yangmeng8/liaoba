@@ -6,6 +6,7 @@ import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../rtc/rtc_controller.dart';
 import 'auth_manager.dart';
 import 'push_service.dart';
 
@@ -41,6 +42,9 @@ class ChatPushService with WidgetsBindingObserver {
   int _badgeCount = 0;
   bool _initialized = false;
   bool _pendingOpenMessagePage = false;
+
+  /// 点击「来电通知」后待补入的 RTC 信令（冷启动时等 Navigator 就绪再弹来电页）。
+  Map<String, dynamic>? _pendingRtcCall;
   bool _androidPushOpenBridgeInitialized = false;
   // 退出登录后，即使系统/极光还有延迟回调到达，也不能再展示旧账号消息。
   bool _pushHandlingEnabled = false;
@@ -177,6 +181,14 @@ class ChatPushService with WidgetsBindingObserver {
       return;
     }
 
+    // RTC 来电推送：前台由 WS 信令拉起来电页（避免横幅+来电页双重打扰）；
+    // 后台由后端极光通知直接展示（铃声/优先级由后端推送配置），
+    // 客户端不补 App 内横幅/本地通知，等用户点击通知进入来电页
+    if (payload.isRtcCall) {
+      debugPrint('[ChatPush] 来电推送，跳过 App 内提醒（点击通知后进入来电页）');
+      return;
+    }
+
     if (isCurrentConversation) {
       debugPrint('[ChatPush] 当前正停留在该聊天页，跳过通知');
       return;
@@ -211,12 +223,19 @@ class ChatPushService with WidgetsBindingObserver {
       return;
     }
     _badgeCount = 0;
-    _pendingOpenMessagePage = true;
     final ChatPushPayload? payload = ChatPushPayload.fromRaw(rawMessage);
     debugPrint(
       '[ChatPush] 点击通知: targetId=${payload?.targetId ?? ''}, raw=$rawMessage',
     );
     unawaited(_requestAndroidBringAppToFront());
+    // 来电通知：不切消息 tab，冷启动 Navigator 就绪后直接弹来电页
+    if (payload != null && payload.isRtcCall) {
+      _pendingRtcCall = payload.rtcExtras ?? <String, dynamic>{};
+      _pendingOpenMessagePage = false;
+      unawaited(_flushPendingRtcCall());
+      return;
+    }
+    _pendingOpenMessagePage = true;
     unawaited(_flushPendingOpenMessagePage());
   }
 
@@ -389,6 +408,31 @@ class ChatPushService with WidgetsBindingObserver {
       await Future<void>.delayed(const Duration(milliseconds: 250));
     }
     debugPrint('[ChatPush] 点击通知跳转消息页失败: 多次重试后仍未成功');
+  }
+
+  /// 消费待补入的来电（点击通知后等 Navigator 就绪，重试 5 次×250ms）。
+  Future<void> _flushPendingRtcCall() async {
+    final signal = _pendingRtcCall;
+    if (signal == null) {
+      return;
+    }
+    for (int attempt = 1; attempt <= 5; attempt++) {
+      if (_pendingRtcCall == null) {
+        return;
+      }
+      final NavigatorState? navigator = _navigatorKey?.currentState;
+      if (navigator == null) {
+        debugPrint('[ChatPush] 来电等待 Navigator 就绪: attempt=$attempt');
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+        continue;
+      }
+      _pendingRtcCall = null;
+      RtcController.instance.handleIncomingFromPush(signal);
+      debugPrint('[ChatPush] 点击来电通知已补入来电页');
+      return;
+    }
+    debugPrint('[ChatPush] 点击来电通知补入失败: 多次重试后 Navigator 仍未就绪');
+    _pendingRtcCall = null;
   }
 
   Future<bool> _openMessagePageFromNotification({
@@ -613,6 +657,8 @@ class ChatPushPayload {
     required this.body,
     required this.needNotify,
     required this.extras,
+    this.isRtcCall = false,
+    this.rtcExtras,
   });
 
   final String messageId;
@@ -623,6 +669,14 @@ class ChatPushPayload {
   final String body;
   final bool needNotify;
   final Map<String, dynamic> extras;
+
+  /// RTC 来电推送（后台/被杀时后端经极光转推的通话邀请）。
+  final bool isRtcCall;
+
+  /// 来电推送携带的 RTC 信令字段（后端约定 msgType=rtc_call 时的
+  /// room/mediaType/inviterUserId/inviterNickname/inviteeIds 等），
+  /// 点击通知后透传给 RtcController.handleIncomingFromPush。
+  final Map<String, dynamic>? rtcExtras;
 
   String get notificationTitle => title.isNotEmpty
       ? title
@@ -784,6 +838,30 @@ class ChatPushPayload {
       return null;
     }
 
+    // RTC 来电推送识别（后端约定 msgType=rtc_call / messageType=call_invite）：
+    // 信令字段取自 params/extras 嵌套层，点击通知后透传给 RtcController 补来电
+    final String msgType = _readString(
+      structuredSources,
+      const <String>[
+        'msgType',
+        'msg_type',
+        'messageType',
+        'message_type',
+        'businessType',
+      ],
+    )?.toLowerCase() ?? '';
+    final bool isRtcCall =
+        msgType == 'rtc_call' || msgType == 'call_invite';
+    Map<String, dynamic>? rtcExtras;
+    if (isRtcCall) {
+      // 信令字段所在层：优先 params 嵌套，其次 jpushExtra/extras 顶层，兜底 raw
+      rtcExtras = paramsData.isNotEmpty
+          ? paramsData
+          : jpushExtra.isNotEmpty
+              ? jpushExtra
+              : (extras.isNotEmpty ? extras : raw);
+    }
+
     return ChatPushPayload(
       messageId: messageId ?? _buildFallbackMessageId(raw, extras, body),
       conversationId: conversationId,
@@ -796,6 +874,8 @@ class ChatPushPayload {
         ...extras,
         ...jpushExtra,
       },
+      isRtcCall: isRtcCall,
+      rtcExtras: rtcExtras,
     );
   }
 

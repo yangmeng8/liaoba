@@ -1,8 +1,20 @@
 package com.example.liaoba
 
+import android.media.MediaPlayer
+
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
+import android.graphics.Color
+import android.media.AudioAttributes
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
@@ -14,6 +26,8 @@ import org.json.JSONObject
 // - 点击通知拉起 App（含冷启动 pending 点击缓存与消费）
 // - bringAppToFront 把后台 App 切回前台
 // - 解析 JPush Intent extras 构造 Flutter 可读的 payload
+// - 来电 fullScreenIntent 全屏通知（锁屏直接全屏弹来电界面，
+//   复用 push_open 冷启动消费链路：n_extras → Dart 识别 call_invite → 来电页）
 class MainActivity : FlutterActivity() {
     companion object {
         private const val TAG = "MainActivity"
@@ -21,6 +35,10 @@ class MainActivity : FlutterActivity() {
         private const val METHOD_ON_NOTIFICATION_OPENED = "onNotificationOpened"
         private const val METHOD_CONSUME_PENDING_OPEN = "consumePendingNotificationOpen"
         private const val METHOD_BRING_APP_TO_FRONT = "bringAppToFront"
+
+        private const val INCOMING_CALL_CHANNEL = "im/incoming_call"
+        private const val CALL_CHANNEL_ID = "im_incoming_call"
+        private const val CALL_NOTIFICATION_ID = 2001
     }
 
     private var pushOpenChannel: MethodChannel? = null
@@ -45,7 +63,179 @@ class MainActivity : FlutterActivity() {
         ).apply {
             setMethodCallHandler(::handlePushOpenChannelCall)
         }
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            INCOMING_CALL_CHANNEL,
+        ).setMethodCallHandler(::handleIncomingCallChannelCall)
         dispatchPendingNotificationOpen("configureFlutterEngine")
+    }
+
+    private fun handleIncomingCallChannelCall(call: MethodCall, result: MethodChannel.Result) {
+        when (call.method) {
+            "showIncomingCall" -> {
+                showIncomingCallNotification(
+                    call.argument<String>("title"),
+                    call.argument<String>("content"),
+                    call.argument<String>("extrasJson"),
+                )
+                result.success(true)
+            }
+
+            "cancelIncomingCall" -> {
+                try {
+                    NotificationManagerCompat.from(this).cancel(CALL_NOTIFICATION_ID)
+                } catch (t: Throwable) {
+                    Log.w(TAG, "cancelIncomingCall: failed", t)
+                }
+                result.success(true)
+            }
+
+            "startRingback" -> {
+                startRingback()
+                result.success(true)
+            }
+
+            "stopRingback" -> {
+                stopRingback()
+                result.success(true)
+            }
+
+            "startRingtone" -> {
+                startRingtone()
+                result.success(true)
+            }
+
+            "stopRingtone" -> {
+                stopRingtone()
+                result.success(true)
+            }
+
+            else -> result.notImplemented()
+        }
+    }
+
+    /// 回铃音 MediaPlayer（主叫等待接听：1 秒嘟 + 3 秒静音循环）
+    private var ringbackPlayer: MediaPlayer? = null
+
+    private fun startRingback() {
+        if (ringbackPlayer?.isPlaying == true) return
+        try {
+            val player = MediaPlayer.create(this, R.raw.ringback)
+            player.isLooping = true
+            player.start()
+            ringbackPlayer = player
+            Log.d(TAG, "startRingback: ok")
+        } catch (t: Throwable) {
+            Log.w(TAG, "startRingback: failed", t)
+        }
+    }
+
+    private fun stopRingback() {
+        try {
+            ringbackPlayer?.let {
+                if (it.isPlaying) it.stop()
+                it.release()
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "stopRingback: failed", t)
+        }
+        ringbackPlayer = null
+    }
+
+    /// 被叫振铃音（来电页弹出时循环，复用来电铃声 push_notification_v3）
+    private var ringtonePlayer: MediaPlayer? = null
+
+    private fun startRingtone() {
+        if (ringtonePlayer?.isPlaying == true) return
+        try {
+            val player = MediaPlayer.create(this, R.raw.push_notification_v3)
+            player.isLooping = true
+            player.start()
+            ringtonePlayer = player
+            Log.d(TAG, "startRingtone: ok")
+        } catch (t: Throwable) {
+            Log.w(TAG, "startRingtone: failed", t)
+        }
+    }
+
+    private fun stopRingtone() {
+        try {
+            ringtonePlayer?.let {
+                if (it.isPlaying) it.stop()
+                it.release()
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "stopRingtone: failed", t)
+        }
+        ringtonePlayer = null
+    }
+
+    /// 来电 fullScreenIntent 全屏通知：
+    /// - 锁屏/熄屏：系统直接点亮屏幕并全屏启动 MainActivity（微信式来电界面）
+    /// - 亮屏后台：显示 heads-up 横幅，点击全屏进入
+    /// - 通知渠道绑定 30s 嘟嘟声铃声（res/raw/push_notification_v3）
+    /// - fullScreenPendingIntent 复用 push_open 冷启动消费链路
+    ///   （n_extras JSON → buildPushOpenPayload → Dart 识别 call_invite → 弹来电页）
+    private fun showIncomingCallNotification(title: String?, content: String?, extrasJson: String?) {
+        try {
+            val soundUri = Uri.parse("android.resource://$packageName/raw/push_notification_v3")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val channel = NotificationChannel(
+                    CALL_CHANNEL_ID,
+                    "来电提醒",
+                    NotificationManager.IMPORTANCE_HIGH,
+                ).apply {
+                    description = "音视频来电全屏提醒"
+                    setSound(
+                        soundUri,
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .build(),
+                    )
+                    enableLights(true)
+                    lightColor = Color.RED
+                }
+                getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+            }
+
+            val fullScreenIntent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP,
+                )
+                putExtra("n_title", title ?: "IM")
+                putExtra("n_content", content ?: "来电邀请")
+                putExtra("n_extras", extrasJson ?: "{}")
+                putExtra("from_full_screen_call", true)
+            }
+            if (fullScreenIntent == null) {
+                Log.w(TAG, "showIncomingCallNotification: launchIntent is null")
+                return
+            }
+            val fullScreenPendingIntent = PendingIntent.getActivity(
+                this,
+                CALL_NOTIFICATION_ID + 1,
+                fullScreenIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+
+            val builder =
+                NotificationCompat.Builder(this, CALL_CHANNEL_ID)
+                    .setSmallIcon(android.R.drawable.ic_menu_call)
+                    .setContentTitle(title ?: "IM")
+                    .setContentText(content ?: "来电邀请")
+                    .setCategory(NotificationCompat.CATEGORY_CALL)
+                    .setPriority(NotificationCompat.PRIORITY_HIGH)
+                    .setFullScreenIntent(fullScreenPendingIntent, true)
+                    .setOngoing(true)
+                    .setAutoCancel(true)
+            NotificationManagerCompat.from(this).notify(CALL_NOTIFICATION_ID, builder.build())
+            Log.i(TAG, "showIncomingCallNotification: posted (title=$title)")
+        } catch (t: Throwable) {
+            Log.w(TAG, "showIncomingCallNotification: failed", t)
+        }
     }
 
     private fun handlePushOpenChannelCall(call: MethodCall, result: MethodChannel.Result) {
