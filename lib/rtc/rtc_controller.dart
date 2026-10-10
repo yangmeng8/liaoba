@@ -71,6 +71,10 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     // iOS CallKit 事件桥（VoIP 推送来电/系统界面接听拒接）
     _callkitChannel.setMethodCallHandler(_onCallkitEvent);
+    // 原生 PushKit 回调可能早于上面的 handler 注册（启动竞态），补一次主动拉取
+    if (Platform.isIOS) {
+      unawaited(_pullVoipTokenOnStart());
+    }
     // LiveKit 远端断开 → 通话收尾（主动挂断时回调已被清空，不误触）
     liveKit.onDisconnected = () {
       if (_stage == RtcStage.running) {
@@ -560,6 +564,21 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
   static const String _voipTokenReportPath =
       '/app-api/member/user/updateVoipToken';
   static String? _lastReportedVoipToken;
+
+  /// 启动时主动向原生要一次 VoIP Token：原生 PushKit 回调通常早于
+  /// 本页 handler 注册，事件桥会丢掉那一条；拉取可兜住这个竞态。
+  Future<void> _pullVoipTokenOnStart() async {
+    try {
+      final token = await _callkitChannel.invokeMethod<String>('getVoipToken');
+      if (token != null && token.isNotEmpty) {
+        await _reportVoipToken(token);
+      } else {
+        debugPrint('[RTC] 启动时原生尚未持有 iOS VoIP Token（PushKit 未回调）');
+      }
+    } catch (e) {
+      debugPrint('[RTC] 拉取 iOS VoIP Token 失败: $e');
+    }
+  }
 
   Future<void> _reportVoipToken(String token) async {
     if (token == _lastReportedVoipToken) return; // 同 token 不重复上报

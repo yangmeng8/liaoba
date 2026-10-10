@@ -23,6 +23,8 @@ import UserNotifications
   private var callkitChannel: FlutterMethodChannel?
   private var callProvider: CXProvider?
   private var voipRegistry: PKPushRegistry?
+  /// 最近一次已上报的 VoIP token（PushKit 可能对同一 token 多次回调）
+  private var lastVoipTokenHex: String?
   private var currentCallUuid: UUID?
   private var currentCallPayload: [String: Any] = [:]
   /// engine 未就绪时缓存的 CallKit 事件（冷启动点接听：incoming → answer 依次入队）
@@ -82,6 +84,14 @@ import UserNotifications
         case "stopRingtone":
           self._playRingtone(false)
           result(nil)
+        case "getVoipToken":
+          // Flutter 侧主动拉取：PushKit 回调可能早于 Dart handler 注册（启动竞态），
+          // 也便于排查「token 是否真的拿到过」。
+          if let token = self.voipRegistry?.pushToken(for: .voIP) {
+            result(AppDelegate._hexToken(token))
+          } else {
+            result(nil)
+          }
         default:
           result(FlutterMethodNotImplemented)
         }
@@ -448,7 +458,50 @@ import UserNotifications
     registry.delegate = self
     registry.desiredPushTypes = [.voIP]
     voipRegistry = registry
-    print("[CallKit] PushKit VoIP 已注册")
+    let backgroundModes = Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") ?? "nil"
+    print("[CallKit] PushKit VoIP 已注册, UIBackgroundModes=\(backgroundModes)")
+    _scheduleVoipTokenCheck(attempt: 1)
+  }
+
+  /// PushKit 注册失败不会回调任何错误，只会静默无 token；
+  /// 这里按间隔复查 + 重新触发注册，并在放弃时打印排查清单。
+  private func _scheduleVoipTokenCheck(attempt: Int) {
+    guard attempt <= 6 else {
+      print("[CallKit] ❌ 多次重试仍未拿到 VoIP Token，请依次检查："
+        + "1) Info.plist UIBackgroundModes 含 voip；"
+        + "2) 描述文件含 Push Notifications（aps-environment）；"
+        + "3) 真机可访问 APNs（非模拟器、网络未拦截 5223/443）；"
+        + "4) 卸载重装 App 后重新注册")
+      return
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + (attempt == 1 ? 3 : 8)) { [weak self] in
+      guard let self, let registry = self.voipRegistry else { return }
+      if let token = registry.pushToken(for: .voIP) {
+        print("[CallKit] 第 \(attempt) 次复查命中本地缓存的 VoIP Token")
+        self._handleVoipToken(token)
+        return
+      }
+      print("[CallKit] ⚠️ 第 \(attempt) 次复查仍无 VoIP Token，重新触发 PushKit 注册")
+      registry.desiredPushTypes = []
+      registry.desiredPushTypes = [.voIP]
+      self._scheduleVoipTokenCheck(attempt: attempt + 1)
+    }
+  }
+
+  /// VoIP token 去重上报（PushKit 对同一 token 会多次回调）
+  private func _handleVoipToken(_ token: Data) {
+    let hex = AppDelegate._hexToken(token)
+    guard hex != lastVoipTokenHex else {
+      print("[CallKit] VoIP Token 未变化，跳过重复上报")
+      return
+    }
+    lastVoipTokenHex = hex
+    print("[CallKit] VoIP Token(\(hex.count)字符): \(hex)")
+    _sendToFlutter(["event": "voipToken", "token": hex])
+  }
+
+  private static func _hexToken(_ token: Data) -> String {
+    token.map { String(format: "%02.2hhx", $0) }.joined()
   }
 
   /// 原生 → Flutter 事件（engine 未就绪时缓存，ready 后 flush）
@@ -484,9 +537,8 @@ import UserNotifications
 // MARK: - PKPushRegistryDelegate（VoIP 推送到达 → CallKit 上报来电）
 extension AppDelegate: PKPushRegistryDelegate {
   func pushRegistry(_ registry: PKPushRegistry, didUpdate pushCredentials: PKPushCredentials, for type: PKPushType) {
-    let token = pushCredentials.token.map { String(format: "%02.2hhx", $0) }.joined()
-    print("[CallKit] VoIP Token(\(token.count)字符): \(token)")
-    _sendToFlutter(["event": "voipToken", "token": token])
+    print("[CallKit] didUpdate pushCredentials, type=\(type.rawValue)")
+    _handleVoipToken(pushCredentials.token)
   }
 
   /// 诊断：VoIP token 失效回调（注册被系统拒绝时触发）
@@ -496,12 +548,16 @@ extension AppDelegate: PKPushRegistryDelegate {
 
   func pushRegistry(
     _ registry: PKPushRegistry,
-    didReceiveIncomingPushWith payload: [AnyHashable: Any],
+    didReceiveIncomingPushWith payload: PKPushPayload,
     for type: PKPushType,
     completion: @escaping () -> Void
   ) {
-    print("[CallKit] 收到 VoIP 推送: \(payload)")
-    let data = _parseCallPayload(payload)
+    // 注意：payload 必须是 PKPushPayload（协议要求），写成 [AnyHashable: Any]
+    // 时不满足协议要求 → 该方法不会暴露给 ObjC 运行时，PushKit 永远回调不到，
+    // 系统还会因为没上报 CallKit 而杀掉 App/停发 VoIP 推送。
+    let userInfo = payload.dictionaryPayload
+    print("[CallKit] 收到 VoIP 推送: \(userInfo)")
+    let data = _parseCallPayload(userInfo)
     guard let roomId = data["roomId"] as? String, !roomId.isEmpty else {
       // 非来电 VoIP 推送：直接放行（苹果要求 report，但极光仅来电场景发 VoIP）
       print("[CallKit] VoIP 推送缺少 roomId，忽略")
