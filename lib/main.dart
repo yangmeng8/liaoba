@@ -53,6 +53,14 @@ Future<void> main() async {
   }
   await _initPush();
   runApp(const LiaobaApp());
+  // 冷启动点「接听」：原生 CallKit 事件在 Dart/导航器就绪前就到达，
+  // 首帧后再取一次缓存事件，否则来电页 push 不出来（跳进 App 却停在首页）
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    unawaited(RtcController.instance.syncPendingCallkitEvents());
+    // 好友「离线」（App 被杀 / 锁屏进程被回收）时来电只落到原生持久化存档里，
+    // 首帧后补读一次：点接听拉起 App 时靠它还原通话页
+    unawaited(RtcController.instance.syncPendingCall());
+  });
 }
 
 /// 极光推送初始化（迁移自 app_im 的编排顺序，顺序不可随意调整）：

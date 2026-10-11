@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:livekit_client/livekit_client.dart';
 
 /// 单个参与者的渲染数据（identity = userId 约定，服务端按此签 token）。
@@ -73,6 +74,9 @@ class RtcLiveKitRoom {
       _room != null && _room!.connectionState == ConnectionState.connected;
 
   /// 连接房间（对齐 H5：连上即开麦；视频通话默认开摄像头）。
+  /// 只有 room.connect 失败才算「连接失败」，由上层重试/收尾；
+  /// 开麦、开摄像头属于「发布」环节，失败（冷启动点接听时 App 还在后台、
+  /// 麦克风权限弹窗未落定等）不能拖垮整通电话，这里降级成尽力而为 + 单独重试。
   Future<void> connect({
     required String url,
     required String token,
@@ -85,12 +89,40 @@ class RtcLiveKitRoom {
     _room = room;
     _disposed = false;
     _listen(room);
-    await room.connect(url, token);
+    try {
+      await room.connect(url, token);
+    } catch (e) {
+      // 连接失败：清掉半成品 Room。先标记 disposed，避免 disconnect 触发
+      // RoomDisconnectedEvent 被上层当成「远端挂断」而误收尾。
+      _disposed = true;
+      for (final cancel in _cancels) {
+        try {
+          cancel();
+        } catch (_) {
+          // 静默
+        }
+      }
+      _cancels.clear();
+      _room = null;
+      _localCameraTrack = null;
+      participants.clear();
+      try {
+        await room.disconnect();
+      } catch (_) {
+        // 静默
+      }
+      try {
+        await room.dispose();
+      } catch (_) {
+        // 静默
+      }
+      rethrow;
+    }
     if (_disposed) return;
     final local = room.localParticipant;
     if (local == null) return;
     // 连上即开麦
-    await local.setMicrophoneEnabled(true);
+    await _publishMic(local);
     // 本地参与者入表
     final localId = local.identity;
     participants[localId] = RtcParticipant(
@@ -101,19 +133,40 @@ class RtcLiveKitRoom {
     );
     if (enableCamera) {
       // 视频通话：连上即开摄像头，并为本地画面建渲染器
-      final pub = await local.setCameraEnabled(true);
-      final track = pub?.track;
-      if (track is LocalVideoTrack) {
-        _localCameraTrack = track;
-        participants[localId]?.cameraRenderer = VideoTrackRenderer(
-          track,
-          fit: VideoViewFit.cover,
-        );
+      try {
+        final pub = await local.setCameraEnabled(true);
+        final track = pub?.track;
+        if (track is LocalVideoTrack) {
+          _localCameraTrack = track;
+          participants[localId]?.cameraRenderer = VideoTrackRenderer(
+            track,
+            fit: VideoViewFit.cover,
+          );
+        }
+      } catch (e) {
+        // 摄像头失败不影响通话（对方仍能听到声音），通话页可手动再开
+        debugPrint('[RTC] 开摄像头失败：$e');
       }
     }
     // 已在房远端（群通话 join 场景）同步入表
     _syncRemote(room);
     _emit();
+  }
+
+  /// 开麦：失败重试几次；仍失败只记日志，不抛异常（通话继续，可在通话页手动开麦）。
+  Future<void> _publishMic(LocalParticipant local) async {
+    for (var attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await local.setMicrophoneEnabled(true);
+        return;
+      } catch (e) {
+        debugPrint('[RTC] 开麦失败(第 $attempt/3 次)：$e');
+        if (attempt < 3) {
+          await Future<void>.delayed(Duration(milliseconds: 300 * attempt));
+        }
+      }
+    }
+    debugPrint('[RTC] 开麦多次失败，通话继续（可在通话页手动开麦）');
   }
 
   void _listen(Room room) {
