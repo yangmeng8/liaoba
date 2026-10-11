@@ -74,6 +74,8 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
     // 原生 PushKit 回调可能早于上面的 handler 注册（启动竞态），补一次主动拉取
     if (Platform.isIOS) {
       unawaited(_pullVoipTokenOnStart());
+      // 冷启动点「接听」：事件早于 handler 注册，主动取原生缓存补处理
+      unawaited(_consumePendingCallkitEvents());
     }
     // LiveKit 远端断开 → 通话收尾（主动挂断时回调已被清空，不误触）
     liveKit.onDisconnected = () {
@@ -186,6 +188,10 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
         await _enterRunning(autoConnect: true);
       } else {
         _startRingback(); // 私聊等待接听：回铃音（嘟—嘟—）
+        // 兜底轮询：锁屏 CallKit 接听场景 1602 信令可能丢失，轮询感知接通
+        _pollAnswerTimer?.cancel();
+        _pollAnswerTimer = Timer.periodic(
+            const Duration(seconds: 3), (_) => unawaited(_pollAnswerStatus()));
         // 私聊：INVITING 即预连 LiveKit 房间（对齐 H5 connectRoom 行为），
         // 对方接听进房时靠 LiveKit ParticipantConnected 本地事件感知接通
         // ——不依赖服务端 webhook；1602 信令到达时双保险重连
@@ -408,6 +414,8 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
     if (data == null) return;
     _stopRingback(); // 接通：停主叫回铃音
     _stopRingtone(); // 接通：停被叫振铃音
+    _pollAnswerTimer?.cancel(); // 接通：停兜底轮询
+    _pollAnswerTimer = null;
     _noAnswerTimer?.cancel();
     _noAnswerTimer = null;
     // 幂等：LiveKit 事件与 1602 信令双通道可能都触发，只在首次切换起计时
@@ -473,6 +481,8 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
     _cancelFullScreenIncomingCall();
     _stopRingback(); // 结束通话：停回铃音（幂等）
     _stopRingtone(); // 结束通话：停振铃音（拒接/超时/取消，幂等）
+    _pollAnswerTimer?.cancel(); // 结束通话：停兜底轮询
+    _pollAnswerTimer = null;
     // iOS：同步结束 CallKit 系统来电界面（对方挂断/超时/取消）
     if (Platform.isIOS) {
       unawaited(_callkitChannel.invokeMethod('endCall').catchError((Object _) {}));
@@ -560,6 +570,30 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  /// 主叫接通感知兜底轮询：1602 信令丢失（如被叫锁屏 CallKit 接听场景）
+  /// 时，每 3 秒查一次通话状态，发现已接听（status=20）直接进通话。
+  Timer? _pollAnswerTimer;
+
+  Future<void> _pollAnswerStatus() async {
+    final room = call?.room;
+    if (room == null || _stage != RtcStage.inviting) {
+      _pollAnswerTimer?.cancel();
+      _pollAnswerTimer = null;
+      return;
+    }
+    try {
+      final data = await RtcApi.joinCall(room: room);
+      if (data.status == 20) {
+        _pollAnswerTimer?.cancel();
+        _pollAnswerTimer = null;
+        _stopRingback();
+        await _enterRunning(autoConnect: true);
+      }
+    } catch (_) {
+      // 查询失败（网络抖动等）等下一轮
+    }
+  }
+
   /// 上报 iOS VoIP Token 给后端（同 token 只报一次；接口未上线时静默容错）。
   static const String _voipTokenReportPath =
       '/app-api/member/user/updateVoipToken';
@@ -577,6 +611,25 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
       }
     } catch (e) {
       debugPrint('[RTC] 拉取 iOS VoIP Token 失败: $e');
+    }
+  }
+
+  /// 消费原生缓存的来电事件（冷启动从通知点「接听」拉起时，
+  /// 原生事件早于本 handler 注册，只能由 Dart 启动后主动取走）。
+  Future<void> _consumePendingCallkitEvents() async {
+    try {
+      final pending = await _callkitChannel
+          .invokeMethod<List<dynamic>>('consumePendingCallkitEvents');
+      if (pending == null || pending.isEmpty) {
+        return;
+      }
+      for (final item in pending) {
+        final args = Map<String, dynamic>.from(item as Map? ?? {});
+        debugPrint('[RTC] 消费原生缓存来电事件: ${args['event'] ?? ''}');
+        await _handleCallkitEvent(args);
+      }
+    } catch (e) {
+      debugPrint('[RTC] 消费原生缓存来电事件失败: $e');
     }
   }
 
@@ -598,7 +651,14 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
   /// iOS CallKit 事件：VoIP token / 来电 / 系统界面接听 / 拒接。
   Future<dynamic> _onCallkitEvent(MethodCall call) async {
     if (call.method != 'onCallkitEvent') return null;
-    final args = Map<String, dynamic>.from(call.arguments as Map? ?? {});
+    await _handleCallkitEvent(
+      Map<String, dynamic>.from(call.arguments as Map? ?? {}),
+    );
+    return null;
+  }
+
+  /// 处理单个来电事件（原生事件桥与冷启动缓存消费共用）。
+  Future<void> _handleCallkitEvent(Map<String, dynamic> args) async {
     final event = args['event'] as String? ?? '';
     final payload =
         Map<String, dynamic>.from(args['payload'] as Map? ?? <String, dynamic>{});
@@ -626,13 +686,19 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
         }
         break;
       case 'reject':
-        // 用户在系统来电界面点「拒接」
+        // 用户在系统来电界面 / 来电通知按钮点「拒绝」
         if (_stage == RtcStage.incoming) {
           await hangup();
+        } else {
+          // 冷启动或后台直接拒接：来电页尚未建立，直接调接口，避免主叫一直响
+          final room =
+              (payload['room'] ?? payload['roomId'])?.toString() ?? '';
+          if (room.isNotEmpty) {
+            await RtcApi.rejectCall(room: room).catchError((Object _) {});
+          }
         }
         break;
     }
-    return null;
   }
 
   /// 后台收到来电信令：发 fullScreenIntent 通知（锁屏直接全屏弹来电界面）。

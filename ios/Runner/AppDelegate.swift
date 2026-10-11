@@ -17,14 +17,24 @@ import UserNotifications
   private var isPushEnabled = UserDefaults.standard.object(forKey: "im_push_enabled") as? Bool ?? true
   private var activeTargetId: String?
   private let notificationVisibilityChannelName = "im/notification_visibility"
+  /// APNs 环境探测 channel：Dart 侧初始化极光前先问一次包内真实的 aps-environment
+  private let pushEnvChannelName = "im/push_env"
+  private var pushEnvChannel: FlutterMethodChannel?
 
   // MARK: - VoIP Push + CallKit（iOS 系统级全屏来电）
   private let callkitChannelName = "im/callkit"
+  /// 来电通知分类（微信风格：通知/横幅上直接显示「接听 / 拒绝」按钮；
+  /// 后端推送需带 category=im_call_invite，见 docs/ios 对接说明）
+  private let callInviteCategoryId = "im_call_invite"
+  private let callAnswerActionId = "im_call_answer"
+  private let callRejectActionId = "im_call_reject"
   private var callkitChannel: FlutterMethodChannel?
   private var callProvider: CXProvider?
   private var voipRegistry: PKPushRegistry?
   /// 最近一次已上报的 VoIP token（PushKit 可能对同一 token 多次回调）
   private var lastVoipTokenHex: String?
+  /// 已上报极光的 VoIP token（避免重复上报刷屏）
+  private var lastVoipTokenSentToJPush: String?
   private var currentCallUuid: UUID?
   private var currentCallPayload: [String: Any] = [:]
   /// engine 未就绪时缓存的 CallKit 事件（冷启动点接听：incoming → answer 依次入队）
@@ -37,6 +47,8 @@ import UserNotifications
     let result = super.application(application, didFinishLaunchingWithOptions: launchOptions)
     // 注册推送通知权限（普通 APNs，与 PushKit VoIP 并行）
     _registerForRemoteNotifications(application)
+    // 注册来电通知分类（锁屏/横幅上的「接听 / 拒绝」按钮）
+    _registerCallNotificationCategory()
     // PushKit 注册放在 super 之后（Flutter implicit engine 场景的启动时序更稳）
     _setupCallKit()
     _setupVoipPush()
@@ -92,6 +104,12 @@ import UserNotifications
           } else {
             result(nil)
           }
+        case "consumePendingCallkitEvents":
+          // 冷启动点通知里的「接听」：事件早于 Dart handler 注册，交给 Dart 启动后主动取走
+          let events = self.pendingCallkitEvents
+          self.pendingCallkitEvents.removeAll()
+          print("[CallKit] Dart 取走缓存事件 \(events.count) 条")
+          result(events)
         default:
           result(FlutterMethodNotImplemented)
         }
@@ -108,6 +126,23 @@ import UserNotifications
         }
         print("[CallKit] 已 flush 缓存事件 \(events.count) 条")
       }
+    }
+    // APNs 环境探测：极光 setup 的 production 必须与包内 aps-environment 一致，
+    // 否则「Release 配置 + 开发签名」会把沙箱令牌按生产环境上报，APNs 直接拒收。
+    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "PushEnvChannel") {
+      let channel = FlutterMethodChannel(
+        name: pushEnvChannelName,
+        binaryMessenger: registrar.messenger()
+      )
+      channel.setMethodCallHandler { [weak self] call, result in
+        switch call.method {
+        case "getApsEnvironment":
+          result(self?._detectApsEnvironment() ?? "unknown")
+        default:
+          result(FlutterMethodNotImplemented)
+        }
+      }
+      pushEnvChannel = channel
     }
     if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "NotificationVisibilityChannel") {
       let channel = FlutterMethodChannel(
@@ -153,6 +188,8 @@ import UserNotifications
   override func applicationDidBecomeActive(_ application: UIApplication) {
     super.applicationDidBecomeActive(application)
     _rebindNotificationDelegate(reason: "applicationDidBecomeActive")
+    // 极光 SDK setup 可能覆盖通知分类，回到前台时补齐
+    _registerCallNotificationCategory()
   }
 
   override func applicationDidEnterBackground(_ application: UIApplication) {
@@ -192,6 +229,60 @@ import UserNotifications
   private func _rebindNotificationDelegate(reason: String) {
     UNUserNotificationCenter.current().delegate = self
     print("[极光推送] 重新接管 UNUserNotificationCenter.delegate = AppDelegate, reason=\(reason)")
+  }
+
+  /// 注册来电通知分类：来电推送带上 category=im_call_invite 后，
+  /// 锁屏/横幅通知会直接出现「接听」「拒绝」按钮（对齐微信体验，避免 CallKit 全屏滑动接听）。
+  private func _registerCallNotificationCategory() {
+    let answer = UNNotificationAction(
+      identifier: callAnswerActionId,
+      title: "接听",
+      options: [.foreground]
+    )
+    let reject = UNNotificationAction(
+      identifier: callRejectActionId,
+      title: "拒绝",
+      options: [.destructive]
+    )
+    let category = UNNotificationCategory(
+      identifier: callInviteCategoryId,
+      actions: [answer, reject],
+      intentIdentifiers: [],
+      options: [.customDismissAction]
+    )
+    let center = UNUserNotificationCenter.current()
+    center.getNotificationCategories { existing in
+      var merged = existing
+      merged.insert(category)
+      center.setNotificationCategories(merged)
+      print("[CallKit] 来电通知分类已注册: \(self.callInviteCategoryId)（接听 / 拒绝）")
+    }
+  }
+
+  /// 读取包内真实的 APNs 环境（aps-environment）。
+  /// 「Release 配置 + 开发签名（Development profile）」是一种常见组合，
+  /// 此时令牌仍是沙箱令牌，如果极光按生产环境上报，APNs 会以 BadDeviceToken 拒收，
+  /// 表现为「Debug 跑得好好的，打成 IPA 后一条推送都收不到」。
+  /// iOS SDK 不提供 SecTask API，这里直接解析包内 embedded.mobileprovision 的 Entitlements。
+  private func _detectApsEnvironment() -> String {
+    guard let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision"),
+          let data = try? Data(contentsOf: url),
+          let text = String(data: data, encoding: .isoLatin1),
+          let start = text.range(of: "<?xml"),
+          let end = text.range(of: "</plist>", range: start.upperBound..<text.endIndex),
+          let plistData = String(text[start.lowerBound..<end.upperBound]).data(using: .isoLatin1),
+          let plist = try? PropertyListSerialization.propertyList(from: plistData, options: [], format: nil)
+            as? [String: Any],
+          let entitlements = plist["Entitlements"] as? [String: Any],
+          let environment = entitlements["aps-environment"] as? String,
+          !environment.isEmpty
+    else {
+      // App Store 分发包不含 embedded.mobileprovision，此时必然是生产环境
+      print("[极光推送] 未读到 aps-environment，按构建模式推断")
+      return "unknown"
+    }
+    print("[极光推送] 包内实际 aps-environment=\(environment)")
+    return environment
   }
 
   /// 注册 APNs 成功
@@ -242,6 +333,16 @@ import UserNotifications
                                        didReceive response: UNNotificationResponse,
                                        withCompletionHandler completionHandler: @escaping () -> Void) {
     print("[极光推送][iOS didReceive] payload=\(response.notification.request.content.userInfo)")
+    let actionId = response.actionIdentifier
+    // 来电通知的「接听 / 拒绝」按钮（分类 im_call_invite）
+    if actionId == callAnswerActionId || actionId == callRejectActionId {
+      let userInfo = response.notification.request.content.userInfo
+      let event = actionId == callAnswerActionId ? "answer" : "reject"
+      print("[CallKit] 来电通知按钮:\(event), payload=\(userInfo)")
+      _sendToFlutter(["event": event, "payload": _parseCallPayload(userInfo)])
+      completionHandler()
+      return
+    }
     guard isPushEnabled else {
       print("[极光推送] 当前账号已退出，忽略通知点击")
       completionHandler()
@@ -498,6 +599,26 @@ import UserNotifications
     lastVoipTokenHex = hex
     print("[CallKit] VoIP Token(\(hex.count)字符): \(hex)")
     _sendToFlutter(["event": "voipToken", "token": hex])
+    _registerVoipTokenToJPush(token)
+  }
+
+  /// 把 PushKit 的 VoIP token 上报极光服务器。
+  /// 极光只有拿到这台设备的 VoIP token，才会用 notification.voip 下发 VoIP 推送；
+  /// 没上报时 REST 接口照样返回 200，但投递报告里 ios_apns_sent=0（推不出去）。
+  private func _registerVoipTokenToJPush(_ token: Data) {
+    let hex = AppDelegate._hexToken(token)
+    guard hex != lastVoipTokenSentToJPush else {
+      return
+    }
+    lastVoipTokenSentToJPush = hex
+    JPUSHService.registerVoipToken(token)
+    print("[CallKit] VoIP Token 已上报极光服务器(registerVoipToken), 长度=\(token.count)")
+    // 极光 SDK 的 setup 由 Dart 侧在启动后调用；若本次上报早于 setup 可能被忽略，补一次
+    DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+      guard let self, self.lastVoipTokenSentToJPush == hex else { return }
+      JPUSHService.registerVoipToken(token)
+      print("[CallKit] VoIP Token 已二次上报极光服务器(兜底)")
+    }
   }
 
   private static func _hexToken(_ token: Data) -> String {
@@ -557,6 +678,8 @@ extension AppDelegate: PKPushRegistryDelegate {
     // 系统还会因为没上报 CallKit 而杀掉 App/停发 VoIP 推送。
     let userInfo = payload.dictionaryPayload
     print("[CallKit] 收到 VoIP 推送: \(userInfo)")
+    // 回执给极光（送达统计/日志），失败不影响下面的 CallKit 上报
+    JPUSHService.handleVoipNotification(userInfo)
     let data = _parseCallPayload(userInfo)
     guard let roomId = data["roomId"] as? String, !roomId.isEmpty else {
       // 非来电 VoIP 推送：直接放行（苹果要求 report，但极光仅来电场景发 VoIP）
@@ -594,6 +717,17 @@ extension AppDelegate: CXProviderDelegate {
     print("[CallKit] 用户点击接听")
     _sendToFlutter(["event": "answer", "payload": currentCallPayload])
     action.fulfill()
+    // 接听后立即结束 CallKit 层通话：系统通话界面即刻收起，
+    // 通话由 App 内视频页承载（微信式：CallKit 只负责锁屏来电提醒）
+    if let uuid = currentCallUuid {
+      provider.reportCall(
+        with: uuid,
+        endedAt: nil,
+        reason: CXCallEndedReason.remoteEnded
+      )
+    }
+    currentCallUuid = nil
+    currentCallPayload = [:]
   }
 
   /// 用户点「拒接」/「挂断」：通知 Flutter 拒绝

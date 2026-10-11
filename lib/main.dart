@@ -62,6 +62,28 @@ Future<void> main() async {
 /// 4. iOS：申请推送权限 + 前台通知交由 AppDelegate 按会话控制 + 重绑通知代理
 /// 5. syncPushStateFromLogin 按本地登录态决定推送处理开关
 /// 6. 已登录则轮询 RegistrationID 并上报后端
+/// 极光 setup 的 APNs 环境必须与包内实际的 aps-environment 一致。
+/// 常见坑：Release 配置 + 开发签名（Development profile）→ 令牌仍是沙箱令牌，
+/// 此时若按 kReleaseMode 传 production=true，极光会推生产网关，APNs 以
+/// BadDeviceToken 拒收，表现为「Debug 正常，打成 IPA 后收不到任何推送/来电」。
+Future<bool> _resolveApsProduction() async {
+  try {
+    final env = await const MethodChannel('im/push_env')
+        .invokeMethod<String>('getApsEnvironment');
+    if (env == 'production') {
+      debugPrint('[极光 Push] 包内 aps-environment=production → 按生产环境上报');
+      return true;
+    }
+    if (env == 'development') {
+      debugPrint('[极光 Push] 包内 aps-environment=development → 按沙箱环境上报');
+      return false;
+    }
+  } catch (e) {
+    debugPrint('[极光 Push] 读取 aps-environment 失败，回退构建模式: $e');
+  }
+  return kReleaseMode;
+}
+
 Future<void> _initPush() async {
   final JPush jpush = JPush();
   ChatPushService.instance.init(jpush);
@@ -102,7 +124,7 @@ Future<void> _initPush() async {
   jpush.setup(
     appKey: _jpushAppKey,
     channel: 'flutter_channel',
-    production: kReleaseMode,
+    production: await _resolveApsProduction(),
     debug: !kReleaseMode,
   );
 
