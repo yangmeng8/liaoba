@@ -165,6 +165,10 @@ class JPushRegistrationUpload {
     await ChatPushService.instance
         .enablePushHandling()
         .timeout(const Duration(seconds: 3), onTimeout: () {});
+    // 顺带补报 iOS VoIP Token：冷启动时若还没登录，那次上报会被后端以
+    // 「账号未登录」拒绝，登录后再报一次，否则后端拿不到本机 VoIP Token，
+    // 来电（VoIP 推送）发不到这台设备。
+    unawaited(RtcController.instance.reportVoipTokenIfNeeded());
     try {
       await client
           .resumePush()

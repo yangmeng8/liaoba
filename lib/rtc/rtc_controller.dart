@@ -787,10 +787,10 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
       if (token != null && token.isNotEmpty) {
         await _reportVoipToken(token);
       } else {
-        debugPrint('[RTC] 启动时原生尚未持有 iOS VoIP Token（PushKit 未回调）');
+        DiagLog.log('[RTC] 启动时原生尚未持有 iOS VoIP Token（PushKit 未回调）');
       }
     } catch (e) {
-      debugPrint('[RTC] 拉取 iOS VoIP Token 失败: $e');
+      DiagLog.log('[RTC] 拉取 iOS VoIP Token 失败: $e');
     }
   }
 
@@ -883,16 +883,42 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> _reportVoipToken(String token) async {
     if (token == _lastReportedVoipToken) return; // 同 token 不重复上报
-    _lastReportedVoipToken = token;
-    debugPrint('[RTC] iOS VoIP Token(${token.length}字符): $token');
+    DiagLog.log('[RTC] iOS VoIP Token(${token.length}字符) 上报后端: $token');
     try {
       final resp = await ApiClient.dio.put<Object>(
         '$_voipTokenReportPath?voipToken=$token',
       );
-      debugPrint('[RTC] VoIP Token 上报返回: ${resp.data}');
+      final data = resp.data;
+      final code = data is Map ? data['code'] : null;
+      if (code == null || code == 0 || code == 200) {
+        _lastReportedVoipToken = token; // 只有成功才去重
+        DiagLog.log('[RTC] ✅ VoIP Token 上报成功: $data');
+      } else {
+        // 未登录时后端返回 code=401「账号未登录」：不能记去重，否则本次会话
+        // 登录后就不会再报了；交给 reportVoipTokenIfNeeded / 下次启动重试。
+        DiagLog.log('[RTC] ❌ VoIP Token 上报被后端拒绝(code=$code)，登录后会重试: $data');
+      }
     } catch (e) {
       // 接口未上线（404 等）不重试不刷屏；后端就绪后下次启动会重新上报
-      debugPrint('[RTC] VoIP Token 上报失败（接口待后端上线）: $e');
+      DiagLog.log('[RTC] ❌ VoIP Token 上报失败: $e');
+    }
+  }
+
+  /// 登录成功后补报 VoIP Token。
+  ///
+  /// App 冷启动时如果还没登录，上报会被后端以「账号未登录」拒绝；只靠启动那一次
+  /// 上报就会漏传，后端没有这台设备的 VoIP Token 就发不出来电推送。
+  Future<void> reportVoipTokenIfNeeded() async {
+    if (!Platform.isIOS) return;
+    try {
+      final token = await _callkitChannel.invokeMethod<String>('getVoipToken');
+      if (token != null && token.isNotEmpty) {
+        await _reportVoipToken(token);
+      } else {
+        DiagLog.log('[RTC] 登录后补报：原生尚未持有 VoIP Token，等 PushKit 回调');
+      }
+    } catch (e) {
+      DiagLog.log('[RTC] 登录后补报 VoIP Token 失败: $e');
     }
   }
 
