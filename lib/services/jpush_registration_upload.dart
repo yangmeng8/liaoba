@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../rtc/rtc_controller.dart';
 import 'api_client.dart';
 import 'auth_manager.dart';
 import 'chat_push_service.dart';
@@ -199,6 +200,9 @@ class JPushRegistrationUpload {
   /// 在本函数第一拍同步关闭，可安全地不 await 本函数（登出流程不阻塞）；
   /// 后续原生调用各自带 3s 超时兜底，防 iOS 清角标等回调不返回导致永久挂起。
   static Future<void> stopPushOnLogout({JPush? jpush}) async {
+    // 先摘掉本机 VoIP Token：后端不再往这台设备发 VoIP 推送（否则未登录/已退出
+    // 的设备仍会弹出系统来电界面）。必须赶在清本地登录态之前发起，故放最前面。
+    unawaited(RtcController.instance.unbindVoipToken());
     await ChatPushService.instance.disablePushHandlingForLogout();
     if (!_supportsCurrentPlatform) return;
 

@@ -4,6 +4,7 @@ import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show MethodCall, MethodChannel;
+import 'package:dio/dio.dart' show Options;
 
 import '../models/im_ws_frame.dart';
 import '../pages/call/call_page.dart';
@@ -892,6 +893,34 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
     } catch (e) {
       // 接口未上线（404 等）不重试不刷屏；后端就绪后下次启动会重新上报
       debugPrint('[RTC] VoIP Token 上报失败（接口待后端上线）: $e');
+    }
+  }
+
+  /// 退出登录：清掉后端保存的本机 VoIP Token，后端就不再往这台设备发 VoIP 推送
+  /// （对齐普通推送退出登录时的 stopPush/deleteAlias）。
+  ///
+  /// 调用方 [JPushRegistrationUpload.stopPushOnLogout] 不 await 本方法，且随后就会
+  /// 清本地登录态，所以这里把当前 token 显式塞进请求头，避免清除竞态导致 401。
+  Future<void> unbindVoipToken() async {
+    // 允许重新登录后再次上报同一个 Token（后端那条记录已被清空）
+    _lastReportedVoipToken = null;
+    final token = AuthManager.instance.accessToken;
+    try {
+      final resp = await ApiClient.dio
+          .put<Object>(
+            '$_voipTokenReportPath?voipToken=',
+            options: Options(
+              headers: <String, dynamic>{
+                if (token != null && token.isNotEmpty)
+                  'Authorization': 'Bearer $token',
+              },
+            ),
+          )
+          .timeout(const Duration(seconds: 5));
+      DiagLog.log('[RTC] 退出登录已通知后端清空 VoIP Token: ${resp.data}');
+    } catch (e) {
+      // 后端未支持空 token（400/404）时静默：登出后原生侧也会忽略 VoIP 推送
+      DiagLog.log('[RTC] 退出登录清空后端 VoIP Token 失败（接口待后端支持）: $e');
     }
   }
 

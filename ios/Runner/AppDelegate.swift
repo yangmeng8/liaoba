@@ -614,13 +614,13 @@ import UserNotifications
   /// 振铃音播放器（被叫来电页弹出时循环播放）
   private var ringtonePlayer: AVAudioPlayer?
 
-  /// 播放/停止被叫振铃音（复用来电铃声资源 push_notification.caf）
+  /// 播放/停止被叫振铃音（来电铃声资源 call_ringtone.caf）
   private func _playRingtone(_ play: Bool) {
     if play {
       if ringtonePlayer?.isPlaying == true {
         return
       }
-      guard let url = Bundle.main.url(forResource: "push_notification", withExtension: "caf") else {
+      guard let url = Bundle.main.url(forResource: "call_ringtone", withExtension: "caf") else {
         print("[Ringtone] 资源未找到")
         return
       }
@@ -650,7 +650,10 @@ import UserNotifications
     }
     config.supportsVideo = true
     config.includesCallsInRecents = false
-    config.ringtoneSound = "push_notification.caf"
+    // 来电铃声用独立文件名 call_ringtone.caf：后端普通推送的 payload 里 sound 仍是
+    // "push_notification.caf"，包内不再提供这个文件后，普通推送会走系统默认提示音
+    // （iOS 找不到指定声音文件时播放默认声），来电仍由 CallKit 播这里的号码铃声。
+    config.ringtoneSound = "call_ringtone.caf"
     let provider = CXProvider(configuration: config)
     provider.setDelegate(self, queue: nil)
     callProvider = provider
@@ -868,6 +871,22 @@ extension AppDelegate: PKPushRegistryDelegate {
     imLog("[CallKit] 收到 VoIP 推送: \(userInfo)")
     // 回执给极光（送达统计/日志），失败不影响下面的 CallKit 上报
     JPUSHService.handleVoipNotification(userInfo)
+    // 未登录（已退出登录）不接收 VoIP 推送：与普通推送保持一致——退出登录后
+    // 原生消息处理开关（isPushEnabled）为 false，通知与点击都直接忽略；来电同理，
+    // 否则锁屏会弹出一个「点接听也没法通话」的系统来电界面。
+    // 后端侧的根治手段：Dart 在退出登录时会调 updateVoipToken 清掉本机 Token
+    // （见 RtcController.unbindVoipToken），之后后端不再往这台设备发 VoIP 推送，
+    // 能走到这里的只有登出瞬间已在途的那一条。
+    // 取舍：苹果要求收到 VoIP 推送后必须 reportNewIncomingCall，这里在未登录场景
+    // 选择直接忽略——未登录时用户无法通话，报告一个假来电体验更差。
+    guard isPushEnabled else {
+      imLog("[CallKit] 当前账号未登录/已退出，忽略 VoIP 推送（不弹系统来电界面）")
+      currentCallUuid = nil
+      currentCallPayload = [:]
+      _clearPersistedCallPayload()
+      completion()
+      return
+    }
     let data = _parseCallPayload(userInfo)
     guard let roomId = data["roomId"] as? String, !roomId.isEmpty else {
       // 非来电 VoIP 推送：直接放行（苹果要求 report，但极光仅来电场景发 VoIP）
