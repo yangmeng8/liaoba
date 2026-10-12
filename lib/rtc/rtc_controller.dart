@@ -11,6 +11,7 @@ import '../services/api_client.dart';
 import '../services/auth_manager.dart';
 import '../services/im_websocket.dart';
 import '../services/rtc_api.dart';
+import '../shared/diag_log.dart';
 import '../shared/json_utils.dart';
 import 'livekit_room.dart';
 
@@ -86,6 +87,7 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
     // LiveKit 远端断开 → 通话收尾（主动挂断时回调已被清空，不误触）
     liveKit.onDisconnected = () {
       if (_stage == RtcStage.running) {
+        DiagLog.log('[RTC] LiveKit 连接断开（本地感知）→ 收尾');
         finishCall(localEnd: false, toast: '通话已结束');
       }
     };
@@ -121,8 +123,15 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
   /// 收尾幂等标记。
   bool _finishing = false;
 
-  /// 来电页补弹重试计数（冷启动时导航器可能尚未挂载）。
-  int _openCallPageRetry = 0;
+  /// 通话页是否已在导航栈上。
+  /// push 返回的 Future 在页面退出时完成，据此复位——比遍历路由可靠，
+  /// 也能让「通话中持续兜底」不会重复 push 出多张来电页。
+  bool _callPageOpen = false;
+
+  /// 通话页兜底定时器：冷启动（锁屏接听/杀进程后接听）时导航器可能迟迟没挂载，
+  /// 一次性重试预算用光后页面就再也不会弹——表现就是「跳进 App 却没有通话页」。
+  /// 改成只要通话还活着就每 300ms 兜底确认一次，直到页面真的 push 出去。
+  Timer? _callPageGuard;
 
   /// App 是否在前台（后台收到来电信令时发 fullScreenIntent 全屏通知）。
   bool _isAppForeground = true;
@@ -244,12 +253,12 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
           myName: AuthManager.instance.nickname ?? '',
         );
         if (attempt > 1) {
-          debugPrint('[RTC] LiveKit 第 $attempt 次连接成功');
+          DiagLog.log('[RTC] LiveKit 第 $attempt 次连接成功');
         }
         return null;
       } catch (e) {
         lastError = _briefError(e);
-        debugPrint(
+        DiagLog.log(
             '[RTC] LiveKit 连接失败(第 $attempt/$attempts 次)：$e（url=${data.livekitUrl}）');
         if (attempt < attempts) {
           await Future<void>.delayed(Duration(milliseconds: 500 * attempt));
@@ -335,6 +344,7 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
     if (room.isEmpty || userId == myUserId || userId <= 0) return;
     final conv = call?.conversationType ?? 0;
     if (conv == 1 && _stage == RtcStage.running && call?.room == room) {
+      DiagLog.log('[RTC] 收到 1603 对方离房信令 → 收尾: room=$room, userId=$userId');
       finishCall(localEnd: false, toast: '通话已结束');
     }
   }
@@ -358,6 +368,7 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
     final room = asString(parsed['room']);
     if (room.isEmpty) return;
     if (call?.room == room || incomingSignal?.room == room) {
+      DiagLog.log('[RTC] 收到 1611 通话结束消息 → 收尾: room=$room');
       finishCall(localEnd: false, toast: '通话已结束');
     }
   }
@@ -410,20 +421,27 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
     try {
       signal = RtcSignalPayload.fromPayload(normalized);
     } catch (e) {
-      debugPrint('[RTC] 推送来电信令解析失败：$e（raw=$raw）');
+      DiagLog.log('[RTC] 推送来电信令解析失败：$e（raw=$raw）');
       return false;
     }
     if (signal.room.isEmpty) {
-      debugPrint('[RTC] 推送来电缺少房间号，忽略');
+      DiagLog.log('[RTC] 推送来电缺少房间号，忽略');
       return false;
     }
-    debugPrint('[RTC] 推送来电补入: room=${signal.room}, '
+    DiagLog.log('[RTC] 推送来电补入: room=${signal.room}, '
         'inviter=${signal.inviterNickname}(${signal.inviterUserId}), '
         'mediaType=${signal.mediaType}');
+    if (myUserId > 0 && signal.inviterUserId == myUserId) {
+      // 后端推送 payload 的 inviterUserId 实测会填成被叫自己的 id（应为来电方 id）。
+      // 这里只提示，不影响来电处理；显示名走 payload 里的 inviterNickname。
+      DiagLog.log('[RTC] ⚠️ 推送 payload 的 inviterUserId 与本人 id 相同'
+          '（后端字段疑似有误，应为来电方 id）：room=${signal.room}, '
+          'inviterNickname=${signal.inviterNickname}');
+    }
     _receiveSignal(signal, fromPush: true);
     if (!isActive) {
       // 静默失败排查用：身份校验不过 / 已在通话中 / 被去重，都会走到这里
-      debugPrint('[RTC] 推送来电未能进入来电页（myUserId=$myUserId，'
+      DiagLog.log('[RTC] 推送来电未能进入来电页（myUserId=$myUserId，'
           'inviteeIds=${signal.inviteeIds}，inviterUserId=${signal.inviterUserId}，'
           'room=${signal.room}，stage=$_stage）');
     }
@@ -437,19 +455,24 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
   /// 与 WS 信令可能不一致，硬校验会把正常来电静默丢掉（点了接听没反应）。
   void _receiveSignal(RtcSignalPayload signal, {bool fromPush = false}) {
     final myUserId = AuthManager.instance.userId ?? 0;
-    // 自己发起的回声。注意 myUserId 未知（0）时不能把 inviterUserId=0 也当成回声
-    // ——推送 payload 缺发起人字段时会把正常来电静默丢掉。
-    final isEcho = myUserId > 0 && signal.inviterUserId == myUserId;
+    // 「自己发起的回声」只对 WS 信令判定：WS 的 1601 会回广播给所有参与方，
+    // 需要靠 inviterUserId 过滤掉自己的那一条。
+    //
+    // 推送（VoIP / 极光通知）是按本机 deviceToken 定向发的：后端 payload 的
+    // inviterUserId 字段并不可靠（实测会填成被叫自己的 id），一旦拿它判回声，
+    // 正常来电信令会被静默丢掉——这正是「锁屏/杀进程后点接听跳进 App 却没有
+    // 通话页」的原因（真机日志：来电信令被判定为自家回声，忽略）。
+    final isEcho = !fromPush && myUserId > 0 && signal.inviterUserId == myUserId;
     switch (signal.status) {
       case RtcParticipantStatus.inviting:
         // 来电：本人是被叫且未在通话中
         if (isEcho) {
-          debugPrint('[RTC] 来电信令被判定为自家回声，忽略: '
+          DiagLog.log('[RTC] 来电信令被判定为自家回声，忽略: '
               'inviterUserId=${signal.inviterUserId}, myUserId=$myUserId');
           return;
         }
         if (!fromPush && !signal.inviteeIds.contains(myUserId)) {
-          debugPrint('[RTC] 来电信令的受邀人不是本人，忽略: myUserId=$myUserId, '
+          DiagLog.log('[RTC] 来电信令的受邀人不是本人，忽略: myUserId=$myUserId, '
               'inviteeIds=${signal.inviteeIds}');
           return;
         }
@@ -457,12 +480,12 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
         // 必须幂等忽略，否则会被当成「已在通话中」自动回拒，把正常来电挂断
         if (signal.room.isNotEmpty &&
             (signal.room == incomingSignal?.room || signal.room == call?.room)) {
-          debugPrint('[RTC] 重复来电信令已忽略: room=${signal.room}');
+          DiagLog.log('[RTC] 重复来电信令已忽略: room=${signal.room}');
           return;
         }
         if (isActive) {
           // 正在通话 → 自动回拒帮主叫挂断
-          debugPrint('[RTC] 已在通话中（stage=$_stage），自动回拒来电 room=${signal.room}');
+          DiagLog.log('[RTC] 已在通话中（stage=$_stage），自动回拒来电 room=${signal.room}');
           if (signal.room.isNotEmpty) {
             RtcApi.rejectCall(room: signal.room).catchError((Object _) {});
           }
@@ -490,28 +513,52 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
   /// App 刚从后台冷启动，网络与登录态可能还没热起来，第一次请求容易直接失败；
   /// 旧行为是立刻 toast + hangup（服务端会话被释放）→ 用户看到「跳进 App 没反应」。
   Future<void> accept({int attempts = 1}) async {
+    // 接听单飞：冷启动/回前台/事件桥/原生存档几条路径会同时触发接听，
+    // 重复请求会被服务端拒绝，失败分支再 hangup 就把刚接通的会话又释放掉
+    // ——表现正是「跳进 App 没弹通话页」。（在线时只有 WS 一条路径，所以不复现）
+    if (_accepting) {
+      DiagLog.log('[RTC] 接听已在进行中，忽略重复触发');
+      return;
+    }
+    _accepting = true;
+    try {
+      await _accept(attempts: attempts);
+    } finally {
+      _accepting = false;
+    }
+  }
+
+  /// 接听是否已在进行中（单飞标记）。
+  bool _accepting = false;
+
+  Future<void> _accept({required int attempts}) async {
     final signal = incomingSignal;
     if (signal == null || _stage != RtcStage.incoming) {
-      debugPrint('[RTC] 接听被跳过：signal=${signal == null ? 'null' : signal.room}，'
+      DiagLog.log('[RTC] 接听被跳过：signal=${signal == null ? 'null' : signal.room}，'
           'stage=$_stage');
       return;
     }
     for (var attempt = 1; attempt <= attempts; attempt++) {
-      debugPrint('[RTC] 开始接听 room=${signal.room}（stage=$_stage，'
+      DiagLog.log('[RTC] 开始接听 room=${signal.room}（stage=$_stage，'
           '第 $attempt/$attempts 次）');
       try {
         final data = await RtcApi.acceptCall(room: signal.room);
         call = data;
-        debugPrint('[RTC] 接听接口成功 room=${data.room}，'
+        DiagLog.log('[RTC] 接听接口成功 room=${data.room}，'
             'livekitUrl=${data.livekitUrl}，token长度=${data.token.length}，'
             'status=${data.status}');
         await _enterRunning(autoConnect: true);
         return;
       } catch (e) {
-        debugPrint('[RTC] ❌ 接听接口失败（第 $attempt/$attempts 次）: $e');
+        DiagLog.log('[RTC] ❌ 接听接口失败（第 $attempt/$attempts 次）: $e');
         if (attempt < attempts && _stage == RtcStage.incoming) {
           await Future<void>.delayed(Duration(milliseconds: 700 * attempt));
           continue;
+        }
+        if (_stage != RtcStage.incoming) {
+          // 期间已被另一条路径接通/结束：不能再 hangup，否则会把接通的通话挂掉
+          DiagLog.log('[RTC] 接听失败，但阶段已变为 $_stage，放弃收尾');
+          return;
         }
         _notifyToast(ApiClient.errorMessage(e));
         // 接听失败也要通知服务端释放会话（hangup 按阶段走 reject/leave），
@@ -540,7 +587,7 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
     }
     if (autoConnect && !liveKit.connected) {
       if (data.livekitUrl.isEmpty || data.token.isEmpty) {
-        debugPrint('[RTC] 入房信息缺失: url="${data.livekitUrl}", token 长度=${data.token.length}');
+        DiagLog.log('[RTC] 入房信息缺失: url="${data.livekitUrl}", token 长度=${data.token.length}');
         _notifyToast('媒体连接失败（缺少入房信息）');
         await hangup();
         return;
@@ -590,6 +637,9 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> finishCall({bool localEnd = false, String? toast}) async {
     if (_finishing) return;
     _finishing = true;
+    _stopCallPageGuard(); // 通话结束：停通话页兜底重试
+    DiagLog.log('[RTC] finishCall: stage=$_stage, localEnd=$localEnd, '
+        'toast=${toast ?? ''}, room=${call?.room ?? incomingSignal?.room ?? ''}');
     _noAnswerTimer?.cancel();
     _noAnswerTimer = null;
     // 清掉 Android 来电全屏通知（拒接/取消/对方挂断时）
@@ -638,7 +688,6 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
     // 回到前台是「锁屏滑动接听 / App 被杀后点接听」链路统一的重试点：
     // 这两条路径上事件桥、导航器都可能当时还没就绪，除了补 push 通话页，
     // 还要重新取一次原生缓存的 CallKit 事件与持久化的来电存档。
-    _openCallPageRetry = 0;
     unawaited(_consumePendingCallkitEvents());
     unawaited(syncPendingCall());
     if (isActive) {
@@ -750,11 +799,11 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
       }
       for (final item in pending) {
         final args = Map<String, dynamic>.from(item as Map? ?? {});
-        debugPrint('[RTC] 消费原生缓存来电事件: ${args['event'] ?? ''}');
+        DiagLog.log('[RTC] 消费原生缓存来电事件: ${args['event'] ?? ''}');
         await _handleCallkitEvent(args);
       }
     } catch (e) {
-      debugPrint('[RTC] 消费原生缓存来电事件失败: $e');
+      DiagLog.log('[RTC] 消费原生缓存来电事件失败: $e');
     }
   }
 
@@ -794,7 +843,7 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
           ? DateTime.now().millisecondsSinceEpoch / 1000 - savedAt
           : 0.0;
       if (ageSeconds > _pendingCallMaxAgeSeconds) {
-        debugPrint(
+        DiagLog.log(
             '[RTC] 原生待处理来电已过期(${ageSeconds.toStringAsFixed(0)}s)，清掉');
         await _clearPendingCall();
         return;
@@ -802,7 +851,7 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
       final room = (payload['room'] ?? payload['roomId'])?.toString() ?? '';
       if (room.isEmpty) return;
       final answered = wrapper['answered'] == true;
-      debugPrint('[RTC] 原生待处理来电: room=$room, answered=$answered, '
+      DiagLog.log('[RTC] 原生待处理来电: room=$room, answered=$answered, '
           'age=${ageSeconds.toStringAsFixed(0)}s, stage=$_stage');
       if (call?.room != room && incomingSignal?.room != room) {
         if (isActive) return; // 正在处理别的通话，不打断
@@ -813,7 +862,7 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
       }
       if (isActive) _openCallPage();
     } catch (e) {
-      debugPrint('[RTC] 读取原生待处理来电失败: $e');
+      DiagLog.log('[RTC] 读取原生待处理来电失败: $e');
     }
   }
 
@@ -856,7 +905,7 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
     final payload =
         Map<String, dynamic>.from(args['payload'] as Map? ?? <String, dynamic>{});
     // 关键排查日志：App 里点「接听/拒绝」后原生到底给了什么（payload 有没有房间号）
-    debugPrint('[CallKit] 事件: $event, payload=$payload');
+    DiagLog.log('[CallKit] 事件: $event, payload=$payload');
     switch (event) {
       case 'voipToken':
         // VoIP deviceToken 上报后端（后端用 VoIP 证书直连 APNs 发起来电推送；
@@ -875,7 +924,7 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
           handleIncomingFromPush(payload);
         }
         if (!isActive) {
-          debugPrint('[RTC] ❌ 来电事件未能弹出来电页；payload=$payload');
+          DiagLog.log('[RTC] ❌ 来电事件未能弹出来电页；payload=$payload');
         }
         break;
       case 'answer':
@@ -896,7 +945,7 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
         if (_stage != RtcStage.incoming) {
           // 走到这里说明「点了接听但找不到这通电话」：要么原生没给房间号，
           // 要么身份校验没过。必须在界面上说出来，否则用户只看到「跳进 App 没反应」。
-          debugPrint('[RTC] ❌ 接听事件未能建立来电上下文，无法接通；payload=$payload');
+          DiagLog.log('[RTC] ❌ 接听事件未能建立来电上下文，无法接通；payload=$payload');
           _notifyToast('接听失败：未取到来电房间号，请把控制台日志发给开发排查');
         }
         break;
@@ -940,7 +989,7 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
           '_j_msgid': 'call_${signal.room}',
         }),
       }).catchError((Object e) {
-        debugPrint('[RTC] 发送来电全屏通知失败: $e');
+        DiagLog.log('[RTC] 发送来电全屏通知失败: $e');
       }),
     );
   }
@@ -955,58 +1004,62 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void _openCallPage() {
+    if (_callPageOpen) return; // 已经在栈上（由 push 的 Future 复位）
     final key = navigatorKey;
-    if (key == null) {
-      // main 还没注入导航 Key（冷启动早期）：同样要重试，否则来电页永远弹不出来
-      debugPrint('[RTC] 导航 Key 尚未注入，稍后重试弹通话页');
-      _scheduleOpenCallPageRetry();
-      return;
-    }
-    final nav = key.currentState;
+    final nav = key?.currentState;
     if (nav == null) {
-      // 冷启动（点通知接听/推送拉起）时导航器还没挂载：稍后重试，
-      // 否则来电页永远 push 不出来，表现就是「跳进 App 了但没有通话页」
-      debugPrint('[RTC] 导航器未就绪，稍后重试弹通话页（第 $_openCallPageRetry 次）');
-      _scheduleOpenCallPageRetry();
+      // 冷启动（锁屏接听 / 杀进程后接听 / 点通知接听）时导航 Key 或导航器
+      // 还没挂载：交给兜底定时器一直重试，直到页面真的 push 出去
+      DiagLog.log('[RTC] 导航器未就绪（key=${key == null ? 'null' : 'ok'}），'
+          '等待兜底重试弹通话页，stage=$_stage');
+      _startCallPageGuard();
       return;
     }
-    _openCallPageRetry = 0;
     // App 在后台（WS 还存活的时间窗内收到来电信令）：
     // Android 发 fullScreenIntent 通知——锁屏直接全屏弹来电界面，
     // 亮屏显示 heads-up；点击/全屏拉起后复用 push_open 链路进来电页
     if (!_isAppForeground && !Platform.isIOS) {
       _showFullScreenIncomingCall();
     }
-    // 已有通话页在栈中则不重复 push（重建由 ListenableBuilder 响应）
-    var exists = false;
-    nav.popUntil((route) {
-      if (route.settings.name == callPageRouteName) exists = true;
-      return true; // 恒 true：仅遍历检测，不真正 pop
-    });
-    if (exists) return;
-    debugPrint('[RTC] push 通话页: room=${call?.room ?? incomingSignal?.room ?? ''}, '
+    _callPageOpen = true;
+    DiagLog.log('[RTC] push 通话页: room=${call?.room ?? incomingSignal?.room ?? ''}, '
         'foreground=$_isAppForeground, stage=$_stage');
-    nav.push(
-      PageRouteBuilder(
-        opaque: false,
-        transitionDuration: Duration.zero,
-        settings: const RouteSettings(name: callPageRouteName),
-        pageBuilder: (_, __, ___) => const RtcCallPage(),
-      ),
-    );
+    nav
+        .push(
+          PageRouteBuilder(
+            opaque: false,
+            transitionDuration: Duration.zero,
+            settings: const RouteSettings(name: callPageRouteName),
+            pageBuilder: (_, __, ___) => const RtcCallPage(),
+          ),
+        )
+        .then((_) {
+      _callPageOpen = false;
+      DiagLog.log('[RTC] 通话页已退出');
+    });
+    // iOS：通话页已经在屏幕上，可以收起系统来电界面了（CallKit 通话保持 active
+    // 是把 App 带到前台的前提，之前 4 秒强制收起会在冷启动慢时打断这个过程）。
+    if (Platform.isIOS) {
+      unawaited(
+          _callkitChannel.invokeMethod('callPageShown').catchError((Object _) {}));
+    }
   }
 
-  /// 导航器尚未挂载时补弹来电页（最多重试约 4 秒）。
-  void _scheduleOpenCallPageRetry() {
-    if (_openCallPageRetry >= 60) return;
-    _openCallPageRetry++;
-    Future<void>.delayed(const Duration(milliseconds: 200), () {
-      if (!isActive) {
-        _openCallPageRetry = 0;
+  /// 通话中持续兜底：导航器就绪慢（冷启动）时每 300ms 尝试一次 push 通话页。
+  void _startCallPageGuard() {
+    if (_callPageGuard != null) return;
+    _callPageGuard = Timer.periodic(const Duration(milliseconds: 300), (_) {
+      if (!isActive || _callPageOpen) {
+        _stopCallPageGuard();
         return;
       }
       _openCallPage();
     });
+  }
+
+  void _stopCallPageGuard() {
+    _callPageGuard?.cancel();
+    _callPageGuard = null;
   }
 
   /// 轻提示（通过 ScaffoldMessenger 弹出，页面未挂载时静默）。

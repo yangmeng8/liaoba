@@ -157,6 +157,22 @@ import UserNotifications
         case "clearPendingCall":
           self._clearPersistedCallPayload()
           result(nil)
+        case "appendDiagLog":
+          // Dart 侧来电链路日志落盘（与原生 imLog 写同一个文件），
+          // 锁屏接听/杀进程接听这类场景事后可直接取出文件排查
+          let args = call.arguments as? [String: Any]
+          if let line = args?["line"] as? String, !line.isEmpty {
+            appendDiagLogLine(line)
+          }
+          result(nil)
+        case "getDiagLogPath":
+          result(diagLogURL()?.path)
+        case "callPageShown":
+          // Dart 侧通话页已经 push 上屏：此时才收起系统来电界面。
+          // CallKit 通话保持 active 是系统把 App 切到前台的前提，
+          // 过早收起（旧实现固定 4 秒）会在冷启动慢时打断这个过程。
+          self._endCallKitCallIfPending(reason: "callPageShown")
+          result(nil)
         default:
           result(FlutterMethodNotImplemented)
         }
@@ -925,7 +941,10 @@ extension AppDelegate: CXProviderDelegate {
     // 先保持 active，等 App 真的回到前台 / 兜底 4 秒后再收起系统通话界面。
     currentCallUuid = action.callUUID
     pendingEndCallKitAfterActivation = true
-    DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+    // 兜底收起时间放宽到 10 秒：冷启动（引擎+Dart 初始化）慢的情况下，
+    // 4 秒时 App 可能还没上屏，这时收起 CallKit 会打断系统把 App 切到前台的过程。
+    // 正常情况下 Dart 侧通话页 push 出来会立刻调 callPageShown 提前收起。
+    DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
       self?._endCallKitCallIfPending(reason: "answerTimeout")
     }
   }
@@ -988,4 +1007,52 @@ extension AppDelegate: CXProviderDelegate {
 private func imLog(_ message: String) {
   print(message)
   NSLog("%@", message)
+  appendDiagLogLine(message)
+}
+
+// MARK: - 诊断日志文件
+
+/// 诊断日志文件名（App 沙盒 Documents 下，Info.plist 已开 UIFileSharingEnabled，
+/// 可从「文件」App / Finder 取出）。锁屏接听、杀进程后接听这类场景很难实时抓
+/// 真机控制台，日志落盘后可以事后排查。
+private let diagLogFileName = "im_diag.log"
+/// 单文件体积上限：超过后只保留后半段，避免无限增长。
+private let diagLogMaxBytes = 256 * 1024
+
+/// 诊断日志内容缓存（避免每次追加重读整个文件）。
+private var diagLogBuffer: String?
+
+private let diagLogTimeFormatter: DateFormatter = {
+  let formatter = DateFormatter()
+  formatter.dateFormat = "MM-dd HH:mm:ss.SSS"
+  return formatter
+}()
+
+private func diagLogURL() -> URL? {
+  FileManager.default
+    .urls(for: .documentDirectory, in: .userDomainMask)
+    .first?
+    .appendingPathComponent(diagLogFileName)
+}
+
+/// 追加一行诊断日志（原生 imLog 与 Dart 侧 appendDiagLog 共用）。
+private func appendDiagLogLine(_ line: String) {
+  guard let url = diagLogURL() else { return }
+  // 注意：deployment target 是 iOS 13.0，FileHandle 的 seekToEnd/write(contentsOf:)
+  // 需要 13.4+，这里用「内存缓存 + 整体重写」的写法，全版本可用。
+  if diagLogBuffer == nil {
+    diagLogBuffer = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+  }
+  var text = diagLogBuffer ?? ""
+  text += "[\(diagLogTimeFormatter.string(from: Date()))] \(line)\n"
+  if text.utf8.count > diagLogMaxBytes {
+    // 超限：丢前半段（尽量落在整行边界上）
+    var kept = String(text.suffix(diagLogMaxBytes / 2))
+    if let newline = kept.firstIndex(of: "\n") {
+      kept = String(kept[kept.index(after: newline)...])
+    }
+    text = kept
+  }
+  diagLogBuffer = text
+  try? text.write(to: url, atomically: true, encoding: .utf8)
 }
