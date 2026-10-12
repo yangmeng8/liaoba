@@ -21,6 +21,7 @@ import 'services/push_service.dart';
 import 'services/version_service.dart';
 import 'shared/app_colors.dart';
 import 'shared/app_theme.dart';
+import 'shared/diag_log.dart';
 import 'shared/font_scale_manager.dart';
 import 'shared/theme_manager.dart';
 
@@ -35,6 +36,10 @@ final GlobalKey<NavigatorState> _rootNavigatorKey =
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // 日志通路标记：每次冷启动落一条，装包后拉 im_diag.log 即可确认
+  // Dart → 原生（appendDiagLog）这条路是通的，也方便区分不同次会话。
+  DiagLog.log('[APP] 冷启动 (release=$kReleaseMode, '
+      '${Platform.operatingSystemVersion})');
   // 启动时恢复字体档位、主题模式和登录态
   await FontScaleManager.instance.load();
   await ThemeManager.instance.load();

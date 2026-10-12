@@ -432,11 +432,15 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
         'inviter=${signal.inviterNickname}(${signal.inviterUserId}), '
         'mediaType=${signal.mediaType}');
     if (myUserId > 0 && signal.inviterUserId == myUserId) {
-      // 后端推送 payload 的 inviterUserId 实测会填成被叫自己的 id（应为来电方 id）。
-      // 这里只提示，不影响来电处理；显示名走 payload 里的 inviterNickname。
-      DiagLog.log('[RTC] ⚠️ 推送 payload 的 inviterUserId 与本人 id 相同'
-          '（后端字段疑似有误，应为来电方 id）：room=${signal.room}, '
-          'inviterNickname=${signal.inviterNickname}');
+      // 「inviterUserId == 本人」只有两种来源，日志里直接区分开：
+      //   1) 本账号在别的端拨打（同号多端），推送同样会发到本机 → 属多端回声；
+      //   2) 后端把 inviterUserId 误填成被叫本人 id（历史 bug）→ 正常来电会被
+      //      回声判断丢掉（表现：点接听跳进 App 却没有通话页）。
+      // 判据：本端此刻是否有同房间的呼叫。
+      final sameRoomHere = call?.room == signal.room;
+      DiagLog.log('[RTC] ⚠️ 推送来电的 inviterUserId 与本人 id 相同'
+          '（${sameRoomHere ? '本端已有同房间通话 → 多端回声' : '本端无同房间通话 → 疑后端字段有误'}）: '
+          'room=${signal.room}, inviterNickname=${signal.inviterNickname}');
     }
     _receiveSignal(signal, fromPush: true);
     if (!isActive) {
@@ -455,19 +459,20 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
   /// 与 WS 信令可能不一致，硬校验会把正常来电静默丢掉（点了接听没反应）。
   void _receiveSignal(RtcSignalPayload signal, {bool fromPush = false}) {
     final myUserId = AuthManager.instance.userId ?? 0;
-    // 「自己发起的回声」只对 WS 信令判定：WS 的 1601 会回广播给所有参与方，
-    // 需要靠 inviterUserId 过滤掉自己的那一条。
+    // 「自己发起的回声」判定：inviterUserId 就是本人 → 这通电话是本人在别的端发起的
+    // （WS 的 1601 会广播给所有参与方，包括主叫自己；同一账号多端登录时推送也会发到
+    // 本人其他设备），不该在本端再弹一次来电页。
     //
-    // 推送（VoIP / 极光通知）是按本机 deviceToken 定向发的：后端 payload 的
-    // inviterUserId 字段并不可靠（实测会填成被叫自己的 id），一旦拿它判回声，
-    // 正常来电信令会被静默丢掉——这正是「锁屏/杀进程后点接听跳进 App 却没有
-    // 通话页」的原因（真机日志：来电信令被判定为自家回声，忽略）。
-    final isEcho = !fromPush && myUserId > 0 && signal.inviterUserId == myUserId;
+    // 注意：这个判断依赖后端把 inviterUserId 填成「来电方 id」。历史上后端在 VoIP/
+    // 通知推送里误填成被叫自己的 id，导致正常来电被静默丢掉（表现：锁屏/杀进程后点
+    // 接听跳进 App 却没有通话页，日志里是「来电信令被判定为自家回声，忽略」）。
+    // 后端已修正，这里恢复严格判断；一旦再出现误判，下面这行日志会直接暴露。
+    final isEcho = myUserId > 0 && signal.inviterUserId == myUserId;
     switch (signal.status) {
       case RtcParticipantStatus.inviting:
         // 来电：本人是被叫且未在通话中
         if (isEcho) {
-          DiagLog.log('[RTC] 来电信令被判定为自家回声，忽略: '
+          DiagLog.log('[RTC] 来电信令被判定为自家回声，忽略（${fromPush ? '推送' : 'WS'}）: '
               'inviterUserId=${signal.inviterUserId}, myUserId=$myUserId');
           return;
         }
