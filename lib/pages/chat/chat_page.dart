@@ -1220,6 +1220,22 @@ class _ChatPageState extends State<ChatPage> {
     return ApiClient.errorMessage(e);
   }
 
+  /// 点击通话记录气泡重拨（对齐 H5 onRtcRedial）：按这通记录原来的媒体类型
+  /// （语音/视频）再呼叫一次对方。
+  Future<void> _redialCallRecord(RtcCallPayload rtc) async {
+    if (!_isPrivate) return;
+    // 已在通话中：RtcController.start 会静默忽略，这里给一句提示，避免「点了没反应」
+    if (RtcController.instance.isActive) {
+      _showSnack('正在通话中，请先结束当前通话');
+      return;
+    }
+    await RtcController.instance.start(
+      conversationType: ImConversationType.private.value,
+      mediaType: rtc.isVideo ? ImRtcMediaType.video : ImRtcMediaType.voice,
+      inviteeIds: <int>[widget.targetId],
+    );
+  }
+
   /// 表情面板选中的 emoji：插入输入框光标处（随文本消息一起发送）。
   void _insertEmoji(String emoji) {
     final sel = _inputCtrl.selection;
@@ -2051,6 +2067,7 @@ class _ChatPageState extends State<ChatPage> {
           onRecall: () => _recall(message),
           nameResolver: _resolveUserName,
           onOpenProfile: _openUserProfile,
+          onRtcRedial: _redialCallRecord,
         );
       },
     );
@@ -2449,6 +2466,9 @@ class _MessageItem extends StatelessWidget {
   /// 点击头像 / 系统提示 @人名 → 跳用户资料页。
   final ValueChanged<int> onOpenProfile;
 
+  /// 点击私聊通话记录气泡 → 按原通话的媒体类型重拨。
+  final ValueChanged<RtcCallPayload> onRtcRedial;
+
   const _MessageItem({
     required this.message,
     required this.older,
@@ -2479,6 +2499,7 @@ class _MessageItem extends StatelessWidget {
     required this.onRecall,
     required this.nameResolver,
     required this.onOpenProfile,
+    required this.onRtcRedial,
   });
 
   /// 与更旧一条间隔超过 5 分钟才显示时间分隔。
@@ -2550,19 +2571,7 @@ class _MessageItem extends StatelessWidget {
       //（多选模式点击切换选中，不重拨——对齐 H5 onRtcRedial 的 selectMode 判断）
       final rtc = message.rtcCallPayload!;
       content = GestureDetector(
-        onTap: selectionMode
-            ? null
-            : () {
-                ScaffoldMessenger.of(context)
-                  ..hideCurrentSnackBar()
-                  ..showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        rtc.isVideo ? '视频通话功能建设中，敬请期待' : '语音通话功能建设中，敬请期待',
-                      ),
-                    ),
-                  );
-              },
+        onTap: selectionMode ? null : () => onRtcRedial(rtc),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
