@@ -456,56 +456,69 @@ import UserNotifications
   }
 
   /// 正在查看某会话时，抑制该会话的前台通知（其余会话正常展示）
+  ///
+  /// 命中判定用「候选 id 集合」而不是单一解析结果：同一条推送里往往同时带
+  /// userId（可能是被叫本人）、senderId / fromUserId（对方）等多个 id，按字段
+  /// 顺序只取一个时会出现「同一个会话有时被抑制、有时弹出通知」。
+  /// 群聊只认 groupId，避免群消息里带上的成员 id 误命中正在看的私聊。
   private func _shouldSuppressForegroundNotification(_ userInfo: [AnyHashable: Any]) -> Bool {
-    guard isChatPageVisible else {
+    guard isChatPageVisible, let active = activeTargetId, !active.isEmpty else {
+      imLog("[极光推送] 聊天页可见标记未生效（visible=\(isChatPageVisible), "
+        + "activeTargetId=\(activeTargetId ?? "")），不抑制前台通知")
       return false
     }
 
-    let targetId = _resolveTargetId(userInfo)
-    imLog("[极光推送] 会话命中检查: activeTargetId=\(activeTargetId ?? ""), payloadTargetId=\(targetId)")
-
-    if let activeTargetId, !activeTargetId.isEmpty, !targetId.isEmpty, activeTargetId == targetId {
+    let candidates = _payloadTargetCandidates(_structuredSources(userInfo))
+    let hit = candidates.contains(active)
+    imLog("[极光推送] 会话命中检查: activeTargetId=\(active), "
+      + "payload候选=\(candidates.sorted()), 命中=\(hit)")
+    if hit {
       imLog("[极光推送] 命中 targetId，抑制当前聊天页通知")
-      return true
     }
-    return false
+    return hit
   }
 
-  /// 从通知 payload 多层结构解析 targetId（群=groupId，私聊=发送者 userId）
-  private func _resolveTargetId(_ userInfo: [AnyHashable: Any]) -> String {
-    let sources = _structuredSources(userInfo)
+  /// 从通知 payload 多层结构解析「这条推送涉及的会话 id」候选集合：
+  /// 群/频道 = groupId（唯一，没有就返回空集，不冒险用发送者 id 命中私聊）；
+  /// 私聊 = 对方 id 的各种字段别名 + conversationId 里内嵌的 id。
+  private func _payloadTargetCandidates(_ sources: [[String: Any]]) -> Set<String> {
     if let groupId = _readString(
       from: sources,
       keys: ["GroupId", "groupId", "groupID", "toGroupId"]
     ), !groupId.isEmpty {
-      return groupId
+      return [groupId]
     }
 
-    if let peerId = _readString(
+    // conversationType：1=私聊 2=群聊 3=频道（与后端 im-notification 一致）
+    let conversationType = _readString(
       from: sources,
-      keys: [
-        "From_Account", "fromAccount", "userId", "userID",
-        "fromUserId", "fromUserID", "peerId", "peerID",
-        "senderId", "senderID", "from"
-      ]
-    ), !peerId.isEmpty {
-      return peerId
+      keys: ["conversationType", "conversation_type", "chatType", "sessionType"]
+    ) ?? ""
+    if conversationType == "2" || conversationType == "3" {
+      return []
     }
 
-    // 兜底：从 conversationId（group_/c2c_ 前缀）还原 targetId
+    var ids = Set<String>()
+    for key in [
+      "From_Account", "fromAccount", "userId", "userID",
+      "fromUserId", "fromUserID", "peerId", "peerID",
+      "senderId", "senderID", "from",
+    ] {
+      if let value = _readString(from: sources, keys: [key]), !value.isEmpty {
+        ids.insert(value)
+      }
+    }
+
+    // conversationId 兜底：c2c_123 / group_456 / 1_123
     if let conversationId = _readString(
       from: sources,
       keys: ["conversationId", "conversationID", "conversation_id", "convId", "sessionId"]
     ), !conversationId.isEmpty {
-      if conversationId.hasPrefix("group_") {
-        return String(conversationId.dropFirst("group_".count))
+      for prefix in ["c2c_", "group_"] where conversationId.hasPrefix(prefix) {
+        ids.insert(String(conversationId.dropFirst(prefix.count)))
       }
-      if conversationId.hasPrefix("c2c_") {
-        return String(conversationId.dropFirst("c2c_".count))
-      }
-      return conversationId
     }
-    return ""
+    return ids
   }
 
   private func _structuredSources(_ userInfo: [AnyHashable: Any]) -> [[String: Any]] {
@@ -614,13 +627,35 @@ import UserNotifications
   /// 振铃音播放器（被叫来电页弹出时循环播放）
   private var ringtonePlayer: AVAudioPlayer?
 
+  /// 系统自带电话铃声（「倒影」/Reflection）候选路径。
+  /// 后台/锁屏来电由 CallKit 播系统默认铃声，App 在前台时没有 CallKit 界面，
+  /// 只能自己播 —— 优先用同一个系统铃声文件，读不到再回落到包内 call_ringtone.caf。
+  private static let systemRingtonePaths = [
+    "/System/Library/Audio/UISounds/Ringtones/Reflection.caf",
+    "/System/Library/Audio/UISounds/Ringtones/Reflection.m4r",
+    "/System/Library/Audio/UISounds/ringtones/Reflection.caf",
+    "/System/Library/Ringtones/Reflection.m4r",
+    "/Library/Ringtones/Reflection.m4r",
+  ]
+
+  /// 前台来电振铃音频：系统电话铃声优先，沙盒读不到时回落包内资源。
+  private func _ringtoneURL() -> URL? {
+    for path in AppDelegate.systemRingtonePaths
+    where FileManager.default.isReadableFile(atPath: path) {
+      imLog("[Ringtone] 使用系统电话铃声: \(path)")
+      return URL(fileURLWithPath: path)
+    }
+    imLog("[Ringtone] 未读到系统铃声文件，回落到包内 call_ringtone.caf")
+    return Bundle.main.url(forResource: "call_ringtone", withExtension: "caf")
+  }
+
   /// 播放/停止被叫振铃音（来电铃声资源 call_ringtone.caf）
   private func _playRingtone(_ play: Bool) {
     if play {
       if ringtonePlayer?.isPlaying == true {
         return
       }
-      guard let url = Bundle.main.url(forResource: "call_ringtone", withExtension: "caf") else {
+      guard let url = _ringtoneURL() else {
         print("[Ringtone] 资源未找到")
         return
       }
@@ -650,10 +685,11 @@ import UserNotifications
     }
     config.supportsVideo = true
     config.includesCallsInRecents = false
-    // 来电铃声用独立文件名 call_ringtone.caf：后端普通推送的 payload 里 sound 仍是
-    // "push_notification.caf"，包内不再提供这个文件后，普通推送会走系统默认提示音
-    // （iOS 找不到指定声音文件时播放默认声），来电仍由 CallKit 播这里的号码铃声。
-    config.ringtoneSound = "call_ringtone.caf"
+    // 来电铃声交给系统：ringtoneSound 留空 = CallKit 播系统默认电话铃声（「倒影」）。
+    // 之前指定包内 call_ringtone.caf（自制的嘟嘟声），来电听感与系统电话不一致。
+    // 注意：普通推送 payload 里 sound 仍是 "push_notification.caf"，包内不再提供
+    // 这个文件后普通推送会走系统默认提示音（iOS 找不到指定声音文件时播放默认声）。
+    config.ringtoneSound = nil
     let provider = CXProvider(configuration: config)
     provider.setDelegate(self, queue: nil)
     callProvider = provider

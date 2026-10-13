@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../rtc/rtc_controller.dart';
+import '../shared/diag_log.dart';
 import 'auth_manager.dart';
 import 'push_service.dart';
 
@@ -113,7 +114,7 @@ class ChatPushService with WidgetsBindingObserver {
       return;
     }
     _activeTargetId = targetId;
-    debugPrint('[ChatPush] 当前可见会话: targetId=$_activeTargetId');
+    DiagLog.log('[ChatPush] 当前可见会话: targetId=$_activeTargetId');
     unawaited(_syncNativeChatVisibility(true));
   }
 
@@ -123,7 +124,7 @@ class ChatPushService with WidgetsBindingObserver {
       return;
     }
     _activeTargetId = null;
-    debugPrint('[ChatPush] 当前会话已隐藏: targetId=$targetId');
+    DiagLog.log('[ChatPush] 当前会话已隐藏: targetId=$targetId');
     unawaited(_syncNativeChatVisibility(false));
   }
 
@@ -165,7 +166,7 @@ class ChatPushService with WidgetsBindingObserver {
     final bool isCurrentConversation =
         _isAppForeground && _isActiveConversation(payload);
 
-    debugPrint(
+    DiagLog.log(
       '[ChatPush] 收到消息: msgId=${payload.messageId}, '
       'targetId=${payload.targetId}, activeTargetId=${_activeTargetId ?? ''}, '
       'senderId=${payload.senderId}, currentUserId=$currentUserId, '
@@ -190,7 +191,7 @@ class ChatPushService with WidgetsBindingObserver {
     }
 
     if (isCurrentConversation) {
-      debugPrint('[ChatPush] 当前正停留在该聊天页，跳过通知');
+      DiagLog.log('[ChatPush] 当前正停留在该聊天页，跳过通知');
       return;
     }
 
@@ -262,6 +263,9 @@ class ChatPushService with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       _badgeCount = 0;
       unawaited(rebindIOSNotificationDelegate());
+      // 回前台重新同步一次当前可见会话：原生只认这一个标记，标记丢了（原生调用
+      // 失败/被其他路径清掉）就会出现「正在看的会话也弹通知」。
+      unawaited(_syncNativeChatVisibility(_activeTargetId != null));
       unawaited(_flushPendingOpenMessagePage());
       return;
     }
@@ -464,17 +468,22 @@ class ChatPushService with WidgetsBindingObserver {
     if (!Platform.isIOS) {
       return;
     }
+    final String targetId = _activeTargetId ?? '';
+    // targetId 为空时不置「可见」标记：原生按 targetId 比对，空标记起不到抑制
+    // 作用，还会把假的「可见=true」写进原生，排查时被误导。
+    final bool effectiveVisible = visible && targetId.isNotEmpty;
     try {
       await _notificationVisibilityChannel.invokeMethod<void>(
         'setChatPageVisible',
         <String, dynamic>{
-          'visible': visible,
-          'targetId': visible ? (_activeTargetId ?? '') : '',
+          'visible': effectiveVisible,
+          'targetId': effectiveVisible ? targetId : '',
         },
       );
-      debugPrint('[ChatPush] 已同步原生聊天页可见状态: $visible');
-    } catch (e, st) {
-      debugPrint('[ChatPush] 同步原生聊天页可见状态失败: $e\n$st');
+      DiagLog.log('[ChatPush] 已同步原生聊天页可见状态: $effectiveVisible, '
+          'targetId=$targetId');
+    } catch (e) {
+      DiagLog.log('[ChatPush] 同步原生聊天页可见状态失败: $e');
     }
   }
 

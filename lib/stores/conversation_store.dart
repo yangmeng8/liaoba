@@ -7,6 +7,7 @@ import '../models/im_conversation.dart';
 import '../models/im_message.dart';
 import '../models/im_ws_frame.dart';
 import '../shared/json_utils.dart';
+import '../shared/diag_log.dart';
 import '../services/auth_manager.dart';
 import '../services/im_api.dart';
 import '../services/im_websocket.dart';
@@ -568,14 +569,18 @@ class ConversationStore with ChangeNotifier {
               : b);
       final friend = friends[peerId];
       final readId = _readMap[key]?.messageId ?? 0;
-      // 撤回的消息（status=2）不算未读：服务端可能拒收撤回消息 id 作读位
-      // （消息已失效），导致 readId 永远推不过去、红点一直不消。
-      final unread = msgs
-          .where((m) =>
-              m.senderId != me &&
-              m.id > readId &&
-              !m.isRecalled)
-          .length;
+      // 未读口径见 _countUnread（普通消息逐条算，通话消息按「一通电话」算）
+      final unread = _countUnread(
+        msgs.map((m) => (
+          id: m.id,
+          senderId: m.senderId,
+          type: m.type,
+          content: m.content,
+          recalled: m.isRecalled,
+        )),
+        me: me,
+        readId: readId,
+      );
 
       result.add(ImConversation(
         type: ImConversationType.private,
@@ -608,13 +613,18 @@ class ConversationStore with ChangeNotifier {
               : b);
       final group = groups[groupId];
       final readId = _readMap[key]?.messageId ?? 0;
-      // 撤回的消息（status=2）不算未读（同私聊：避免读位推不过去）。
-      final unread = msgs
-          .where((m) =>
-              m.senderId != me &&
-              m.id > readId &&
-              !m.isRecalled)
-          .length;
+      // 未读口径同私聊（群通话同样会落「邀约 + 结束」多条消息）
+      final unread = _countUnread(
+        msgs.map((m) => (
+          id: m.id,
+          senderId: m.senderId,
+          type: m.type,
+          content: m.content,
+          recalled: m.isRecalled,
+        )),
+        me: me,
+        readId: readId,
+      );
 
       result.add(ImConversation(
         type: ImConversationType.group,
@@ -667,5 +677,74 @@ class ConversationStore with ChangeNotifier {
 
     result.sort((a, b) => a.compareTo(b));
     return result;
+  }
+
+  /// 通话相关的会话消息类型（与后端 ImContentTypeEnum / RtcController 的信令号
+  /// 一致）：1601 邀请、1602 参与者入房、1603 参与者离房、1610 通话开始、
+  /// 1611 通话结束。这些消息只表示通话过程，不按「一条一未读」计。
+  static const Set<int> _rtcMessageTypes = <int>{1601, 1602, 1603, 1610, 1611};
+
+  /// 上一次落盘的通话未读计算明细签名（避免每次重建都刷日志）。
+  static String? _lastCallUnreadSignature;
+
+  /// 未读数口径：普通消息一条算 1；一通通话最多算 1 条未读，且接通过的不算。
+  ///
+  /// 后端一通电话（私聊/群聊都一样）会在会话消息流里落多条消息：邀约 1601/1610
+  /// 加结束 1611（群通话还可能落 1602/1603 入房离房提示），逐条计数就是
+  /// 「一通电话未读 +2 / +3」。对齐微信口径：接通过（1611 的 durationSeconds>0）
+  /// 不加未读；未接通（拒接 / 取消 / 超时 / 中断）算 1 条未读。
+  ///
+  /// 同一通电话按 room 归并（这些消息都带同一个 room），room 缺失时退化为按
+  /// 消息 id 各算一条（不会把两通不同的电话误并成一条）。
+  static int _countUnread(
+    Iterable<
+            ({int id, int senderId, int type, String content, bool recalled})>
+        msgs, {
+    required int me,
+    required int readId,
+  }) {
+    var unread = 0;
+    // room → 是否已接通（任一通话消息表明接通即算接通）
+    final callRooms = <String, bool>{};
+    // 诊断明细：通话消息（类型#id@room）与参与计数的其它消息类型
+    final callTrace = <String>[];
+    final plainTrace = <int>[];
+    for (final m in msgs) {
+      // 撤回的消息（status=2）不算未读：服务端可能拒收撤回消息 id 作读位
+      // （消息已失效），导致 readId 永远推不过去、红点一直不消。
+      if (m.senderId == me || m.recalled || m.id <= readId) continue;
+      if (_rtcMessageTypes.contains(m.type)) {
+        final room = parseRtcCallPayload(m.content)?.room ?? '';
+        final callKey = room.isNotEmpty ? room : 'rtc_msg_${m.id}';
+        final answered = _rtcCallAnswered(m.type, m.content);
+        callRooms.update(callKey, (v) => v || answered, ifAbsent: () => answered);
+        callTrace.add('${m.type}#${m.id}@${room.isEmpty ? '-' : room}'
+            '${answered ? '(已接通)' : ''}');
+        continue;
+      }
+      unread += 1;
+      plainTrace.add(m.type);
+    }
+    for (final answered in callRooms.values) {
+      if (!answered) unread += 1; // 未接通的一通电话 = 1 条未读
+    }
+    // 会话里出现通话消息时，把这次未读计算明细落一次日志（签名去重）：
+    // 万一未读数还是不对，日志里能直接看到通话消息类型与参与计数的其它消息类型。
+    if (callTrace.isNotEmpty) {
+      final signature = '$callTrace|$plainTrace|$unread';
+      if (signature != _lastCallUnreadSignature) {
+        _lastCallUnreadSignature = signature;
+        DiagLog.log('[会话未读] 通话消息=$callTrace，'
+            '参与计数的其它消息类型=$plainTrace，readId=$readId，计算未读=$unread');
+      }
+    }
+    return unread;
+  }
+
+  /// 这通电话是否已接通：只看结束消息（1611）的 durationSeconds，
+  /// 其余过程信令（1601/1602/1603/1610）不表态。
+  static bool _rtcCallAnswered(int type, String content) {
+    if (type != ImRtcMessageType.callEnd) return false;
+    return (parseRtcCallPayload(content)?.durationSeconds ?? 0) > 0;
   }
 }
