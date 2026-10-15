@@ -12,6 +12,7 @@ import '../services/api_client.dart';
 import '../services/auth_manager.dart';
 import '../services/im_websocket.dart';
 import '../services/rtc_api.dart';
+import '../stores/conversation_store.dart';
 import '../shared/diag_log.dart';
 import '../shared/json_utils.dart';
 import 'livekit_room.dart';
@@ -670,6 +671,16 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
     _runningSince = null;
     notifyListeners();
     _finishing = false;
+    // 通话结束（含未接来电）后端会写通话记录消息：触发会话增量同步，
+    // 恢复已删除会话的显示（userDeleted 重置）并刷新最后一条消息。
+    // 服务端通话记录异步落库可能晚于本次同步：延迟 5s 补拉一次兜底
+    unawaited(ConversationStore.instance.load().catchError((Object _) {}));
+    Timer(const Duration(seconds: 5), () {
+      if (_stage == RtcStage.idle) {
+        unawaited(
+            ConversationStore.instance.load().catchError((Object _) {}));
+      }
+    });
   }
 
   /// ==================== 内部工具 ====================

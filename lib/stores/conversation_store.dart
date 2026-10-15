@@ -74,6 +74,24 @@ class ConversationStore with ChangeNotifier {
   /// 冷启动快照差集推导），_rebuild 聚合时过滤不显示。
   final Set<String> _deletedKeys = {};
 
+  /// 删除会话时的全局消息 id 水位（key: type_targetId）：
+  /// 之后到达的新消息（如 RTC 通话记录 type=1610，服务端此时不更新
+  /// conversation-read 表的 userDeleted）超过水位的会话视为复活。
+  final Map<String, int> _deletedWatermark = {};
+
+  /// 当前三个消息流的最大消息 id（删除会话时记水位用）。
+  int _maxMessageId() {
+    var max = 0;
+    if (_privateMsgs.isNotEmpty) max = _privateMsgs.last.id;
+    if (_groupMsgs.isNotEmpty && _groupMsgs.last.id > max) {
+      max = _groupMsgs.last.id;
+    }
+    if (_channelMsgs.isNotEmpty && _channelMsgs.last.id > max) {
+      max = _channelMsgs.last.id;
+    }
+    return max;
+  }
+
   /// 读位置增量游标：上次拉取到的最新 updateTime（毫秒）与最后一条记录 id。
   /// null = 未初始化（冷启动/切账号/下拉刷新，下次同步走 list 快照）。
   int? _readCursorTime;
@@ -215,6 +233,7 @@ class ConversationStore with ChangeNotifier {
       _channelMsgs.clear();
       _readMap.clear();
       _deletedKeys.clear();
+      _deletedWatermark.clear();
       _readCursorTime = null;
       _readCursorId = 0;
       _ownerUserId = myUserId;
@@ -266,6 +285,38 @@ class ConversationStore with ChangeNotifier {
         ..clear()
         ..addAll(_messageStreamKeys(myUserId)
             .difference(_readMap.keys.toSet()));
+    }
+
+    // ③+ 已删会话复活：本次拉到的新消息 id 超过删除水位的会话恢复显示
+    //（RTC 通话消息 type=1610 到达时服务端不更新 read 表 userDeleted，
+    // 冷启动快照差集推导会把这类会话误判为已删除，靠消息水位纠正）
+    if (_deletedKeys.isNotEmpty) {
+      final me = myUserId ?? -1;
+      for (final m in privateMsgs) {
+        final key =
+            '${ImConversationType.private.value}_${m.senderId == me ? m.receiverId : m.senderId}';
+        if (_deletedKeys.contains(key) &&
+            m.id > (_deletedWatermark[key] ?? 0)) {
+          _deletedKeys.remove(key);
+          _deletedWatermark.remove(key);
+        }
+      }
+      for (final m in groupMsgs) {
+        final key = '${ImConversationType.group.value}_${m.groupId}';
+        if (_deletedKeys.contains(key) &&
+            m.id > (_deletedWatermark[key] ?? 0)) {
+          _deletedKeys.remove(key);
+          _deletedWatermark.remove(key);
+        }
+      }
+      for (final m in channelMsgs) {
+        final key = '${ImConversationType.channel.value}_${m.channelId}';
+        if (_deletedKeys.contains(key) &&
+            m.id > (_deletedWatermark[key] ?? 0)) {
+          _deletedKeys.remove(key);
+          _deletedWatermark.remove(key);
+        }
+      }
     }
 
     // ④ 客户端聚合重建会话列表（基于累积消息流）
@@ -382,6 +433,7 @@ class ConversationStore with ChangeNotifier {
     );
     final key = '${type.value}_$targetId';
     _deletedKeys.add(key);
+    _deletedWatermark[key] = _maxMessageId(); // 记删除时消息水位（复活判据）
     _dropMessagesOf(type, targetId);
     conversations = _rebuild(_privateMsgs, _groupMsgs, _channelMsgs,
         AuthManager.instance.userId);
@@ -478,6 +530,7 @@ class ConversationStore with ChangeNotifier {
         } else {
           _readMap[r.mapKey] = r;
           _deletedKeys.remove(r.mapKey);
+          _deletedWatermark.remove(r.mapKey);
         }
       }
       // 防御：updateTime 缺失时保持原游标（避免回退导致重复拉取）
