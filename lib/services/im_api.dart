@@ -343,17 +343,20 @@ class ImApi {
     ApiClient.unwrap(resp);
   }
 
-  /// 单向删除会话（仅自己）：服务端标记该会话 userDeleted=1，
-  /// 冷启动 list 快照不再返回；对方不受影响。
+  /// 删除会话：双向/单向由 doubleDelete 区分。
+  /// - 双向（私聊）：双方会话都被删除，聊天记录互不可见
+  /// - 单向（群聊/频道，或用户选「仅我的设备」）：仅自己 userDeleted=1
   static Future<void> deleteConversationRead({
     required ImConversationType conversationType,
     required int targetId,
+    bool doubleDelete = false,
   }) async {
     final resp = await ApiClient.dio.get(
       '/app-api/im/conversation-read/delete',
       queryParameters: {
         'conversationType': conversationType.value,
         'targetId': targetId,
+        if (doubleDelete) 'doubleDelete': true,
       },
     );
     ApiClient.unwrap(resp);

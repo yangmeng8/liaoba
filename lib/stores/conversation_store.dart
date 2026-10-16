@@ -426,10 +426,12 @@ class ConversationStore with ChangeNotifier {
   /// 本地即时隐藏 + 清该会话消息缓存（防后续新消息到来时旧消息重显）；
   /// 失败抛异常由调用方提示。新消息到达服务端重置 userDeleted 后，
   /// pull 增量会自动恢复会话显示。
-  Future<void> deleteConversation(ImConversationType type, int targetId) async {
+  Future<void> deleteConversation(ImConversationType type, int targetId,
+      {bool doubleDelete = false}) async {
     await ImApi.deleteConversationRead(
       conversationType: type,
       targetId: targetId,
+      doubleDelete: doubleDelete,
     );
     final key = '${type.value}_$targetId';
     _deletedKeys.add(key);

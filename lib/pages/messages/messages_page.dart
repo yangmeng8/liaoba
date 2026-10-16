@@ -152,17 +152,25 @@ class _MessagesPageState extends State<MessagesPage> {
     );
   }
 
-  /// 左滑删除会话（单向删除：仅自己不显示，服务端标记 userDeleted=1，
-  /// 对方不受影响；新消息到来时服务端重置后会话自动恢复显示）。
+  /// 左滑删除会话。私聊弹双选项：仅我的设备（单向）/ 我和好友都删（双向
+  /// doubleDelete=true，双方会话与聊天记录互不可见）；群聊/频道保持
+  /// 单向删除（仅自己不显示）。
   Future<void> _deleteConversation(ImConversation c) async {
-    // 先弹确认弹框，防误触
-    final bool? confirmed = await showDialog<bool>(
+    // 私聊弹双选项，群聊/频道保持单一确认
+    final String? choice = await showDialog<String>(
       context: context,
-      builder: (ctx) => const _DeleteConfirmDialog(),
+      builder: (ctx) => _DeleteConfirmDialog(
+        isPrivate: c.type == ImConversationType.private,
+        friendName: c.title,
+      ),
     );
-    if (confirmed != true || !mounted) return;
+    if (choice == null || !mounted) return;
     try {
-      await ConversationStore.instance.deleteConversation(c.type, c.targetId);
+      await ConversationStore.instance.deleteConversation(
+        c.type,
+        c.targetId,
+        doubleDelete: choice == 'double',
+      );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -220,8 +228,46 @@ class _MessagesPageState extends State<MessagesPage> {
 }
 
 /// 删除会话确认弹框（与退出登录弹框同风格）。
+/// 删除确认弹框。
+/// - 私聊：双选项（仅我的设备 / 为我和好友删除-双向）
+/// - 群聊/频道：单选项确认（单向删除）
+/// pop 返回：null=取消；'single'=单向；'double'=双向
 class _DeleteConfirmDialog extends StatelessWidget {
-  const _DeleteConfirmDialog();
+  final bool isPrivate;
+  final String friendName;
+
+  const _DeleteConfirmDialog({
+    this.isPrivate = false,
+    this.friendName = '',
+  });
+
+  Widget _button(
+    BuildContext context, {
+    required String label,
+    required String value,
+    bool danger = false,
+  }) =>
+      SizedBox(
+        width: double.infinity,
+        height: 46,
+        child: ElevatedButton(
+          onPressed: () => Navigator.of(context).pop(value),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: danger ? null : context.colors.bg,
+            foregroundColor:
+                danger ? const Color(0xFFFA5151) : context.colors.text,
+            elevation: 0,
+            side: danger ? null : BorderSide(color: context.colors.divider),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(23),
+            ),
+          ),
+          child: Text(
+            label,
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+          ),
+        ),
+      );
 
   @override
   Widget build(BuildContext context) => Dialog(
@@ -235,7 +281,7 @@ class _DeleteConfirmDialog extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                '提示',
+                isPrivate ? '删除会话' : '提示',
                 style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.w700,
@@ -244,62 +290,78 @@ class _DeleteConfirmDialog extends StatelessWidget {
               ),
               const SizedBox(height: 24),
               Text(
-                '删除后该会话仅从你的消息列表移除，对方不受影响',
+                isPrivate
+                    ? '删除后，聊天记录将不可恢复'
+                    : '删除后该会话仅从你的消息列表移除，对方不受影响',
                 style: TextStyle(fontSize: 16, color: context.colors.muted),
               ),
               const SizedBox(height: 32),
-              Row(
-                children: [
-                  Expanded(
-                    child: SizedBox(
-                      height: 46,
-                      child: ElevatedButton(
-                        onPressed: () => Navigator.of(context).pop(false),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: context.colors.bg,
-                          foregroundColor: context.colors.text,
-                          elevation: 0,
-                          side: BorderSide(color: context.colors.divider),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(23),
+              if (isPrivate) ...[
+                // 双向删除（高危红字）：双方会话与聊天记录互不可见
+                _button(context,
+                    label: '为我和 $friendName 删除',
+                    value: 'double',
+                    danger: true),
+                const SizedBox(height: 12),
+                _button(context,
+                    label: '仅在我的设备中删除', value: 'single'),
+                const SizedBox(height: 12),
+                _button(context, label: '取消', value: 'cancel'),
+              ] else ...[
+                Row(
+                  children: [
+                    Expanded(
+                      child: SizedBox(
+                        height: 46,
+                        child: ElevatedButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: context.colors.bg,
+                            foregroundColor: context.colors.text,
+                            elevation: 0,
+                            side: BorderSide(color: context.colors.divider),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(23),
+                            ),
                           ),
-                        ),
-                        child: const Text(
-                          '取消',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: SizedBox(
-                      height: 46,
-                      child: ElevatedButton(
-                        onPressed: () => Navigator.of(context).pop(true),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppColors.lime,
-                          foregroundColor: Colors.black,
-                          elevation: 0,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(23),
-                          ),
-                        ),
-                        child: const Text(
-                          '确定',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
+                          child: const Text(
+                            '取消',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
                         ),
                       ),
                     ),
-                  ),
-                ],
-              ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: SizedBox(
+                        height: 46,
+                        child: ElevatedButton(
+                          onPressed: () =>
+                              Navigator.of(context).pop('single'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.lime,
+                            foregroundColor: Colors.black,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(23),
+                            ),
+                          ),
+                          child: const Text(
+                            '确定',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ],
           ),
         ),
