@@ -8,5 +8,16 @@
 	<true/>
 	<key>com.apple.security.network.server</key>
 	<true/>
+	<!-- 客户端网络访问（API/WebSocket/LiveKit） -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<!-- 音视频通话：摄像头 + 麦克风 -->
+	<key>com.apple.security.device.camera</key>
+	<true/>
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+	<!-- 聊天图片/文件缓存读取 -->
+	<key>com.apple.security.files.user-selected.read-only</key>
+	<true/>
 </dict>
 </plist>

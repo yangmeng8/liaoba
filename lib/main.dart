@@ -98,6 +98,12 @@ Future<bool> _resolveApsProduction() async {
 }
 
 Future<void> _initPush() async {
+  // 桌面端（macOS/Windows）：极光无桌面 SDK，跳过推送体系；
+  // 桌面 App 常驻在线，消息/来电全走 WebSocket 实时通道
+  if (!Platform.isAndroid && !Platform.isIOS) {
+    debugPrint('[极光 Push] 桌面平台，跳过推送初始化');
+    return;
+  }
   final JPush jpush = JPush();
   ChatPushService.instance.init(jpush);
   // 注入全局导航与 Tab 切换（通知点击后跳转消息 tab 用）

@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
@@ -75,6 +77,14 @@ class _QrScanPageState extends State<QrScanPage> {
 
   @override
   Widget build(BuildContext context) {
+    // 桌面端（macOS/Windows）：mobile_scanner 依赖相机插件不支持桌面，
+    // 展示占位页（四个扫码入口统一在此拦截）
+    if (!Platform.isAndroid && !Platform.isIOS) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('扫一扫')),
+        body: const Center(child: Text('桌面版暂不支持相机扫码')),
+      );
+    }
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
