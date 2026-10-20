@@ -4,7 +4,10 @@ import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'models/im_conversation.dart';
+import 'pages/chat/chat_page.dart';
 import 'pages/contacts/contacts_page.dart';
+import 'pages/contacts/user_profile_page.dart';
 import 'stores/conversation_store.dart';
 import 'stores/presence_store.dart';
 import 'stores/request_badge_store.dart';
@@ -21,8 +24,10 @@ import 'services/push_service.dart';
 import 'services/version_service.dart';
 import 'shared/app_colors.dart';
 import 'shared/app_theme.dart';
+import 'shared/desktop_layout.dart';
 import 'shared/diag_log.dart';
 import 'shared/font_scale_manager.dart';
+import 'shared/im_avatar.dart';
 import 'shared/theme_manager.dart';
 
 /// 极光推送 AppKey。
@@ -254,6 +259,18 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   int index = 0;
   final pages = const [MessagesPage(), ContactsPage(), MePage()];
 
+  // ==================== 桌面三栏（微信 PC 风格）右栏状态 ====================
+  // 右栏互斥展示：聊天会话 / 好友资料 / 我的面板；全空显示占位空态。
+
+  /// 右栏当前展示的聊天会话。
+  ImConversation? _desktopConv;
+
+  /// 右栏当前展示的好友资料页目标 userId。
+  int? _desktopProfileUserId;
+
+  /// 右栏是否展示「我的」面板。
+  bool _desktopShowMe = false;
+
   @override
   void initState() {
     super.initState();
@@ -295,8 +312,17 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   /// 外部（推送点击）请求切换 Tab。
   void _onExternalTabSwitch() {
     if (!mounted) return;
-    setState(() => index = HomeShell.tabNotifier.value);
+    // 桌面三栏只有 消息/通讯录 两个导航项（「我的」并入右栏面板）
+    final target = HomeShell.tabNotifier.value.clamp(0, isDesktop ? 1 : 2);
+    setState(() => index = target);
   }
+
+  /// 当前是否运行在桌面三栏布局（供无 context 场景判断窗口宽度）。
+  bool get isDesktop =>
+      _desktopWidth != null && _desktopWidth! >= kDesktopBreakpoint;
+
+  /// 最近一次 build 量到的窗口宽度（null = 还没 build 过）。
+  double? _desktopWidth;
 
   /// 消息 Tab 未读总数（所有会话未读之和）。
   int get _totalUnread => ConversationStore.instance.conversations
@@ -326,7 +352,12 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    // 深色：tabBar 深灰 surface；浅色：tabBar 白 card
+    // 记录窗口宽度供无 context 场景（外部 tab 切换 clamp）判断布局
+    _desktopWidth = MediaQuery.of(context).size.width;
+    // 桌面三栏（微信 PC 风格）：左导航 Rail + 中列表 + 右内容区
+    if (isDesktopLayout(context)) {
+      return _buildDesktopLayout(context, colors);
+    }
     final tabBarBg = isDark ? colors.surface : colors.card;
     // 深色：选中 icon + label 都用 lime；浅色：选中 icon lime、label 用 text（黑）
     final selectedIconColor = AppColors.lime;
@@ -389,6 +420,298 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
           ],
         );
         },
+      ),
+    );
+  }
+
+  // ==================== 桌面三栏布局（微信 PC 风格） ====================
+
+  /// 桌面三栏骨架：左 64px 导航 Rail + 中 300px 列表面板 + 右内容区。
+  Widget _buildDesktopLayout(BuildContext context, ThemeColors colors) {
+    return Scaffold(
+      backgroundColor: colors.bg,
+      body: Row(
+        // stretch：三栏各自撑满窗口高度（Rail 内含 Spacer，
+        // 默认 center 收缩高度会导致无界约束异常）
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // 左栏：导航 Rail（角标数据源必须在 builder 内读取保证实时刷新）
+          ListenableBuilder(
+            listenable: Listenable.merge([
+              ConversationStore.instance,
+              RequestBadgeStore.instance,
+            ]),
+            builder: (context, _) => _DesktopRail(
+              selectedIndex: index.clamp(0, 1),
+              totalUnread: _totalUnread,
+              pendingRequests: RequestBadgeStore.instance.pending,
+              onSelect: (i) {
+                HapticFeedback.selectionClick();
+                setState(() => index = i);
+              },
+              onAvatarTap: _openDesktopMe,
+              onSettingsTap: _openDesktopMe,
+            ),
+          ),
+          // 中栏：消息 / 通讯录 列表（IndexedStack 保滚动位置）
+          SizedBox(
+            width: 300,
+            child: IndexedStack(
+              index: index.clamp(0, 1),
+              children: [
+                MessagesPage(onOpenConversation: _openDesktopConversation),
+                ContactsPage(onOpenFriend: _openDesktopFriend),
+              ],
+            ),
+          ),
+          // 中右分隔线
+          VerticalDivider(width: 1, thickness: 1, color: colors.divider),
+          // 右栏：聊天 / 资料 / 我的 / 空态
+          Expanded(child: _buildDesktopRightPanel(context, colors)),
+        ],
+      ),
+    );
+  }
+
+  /// 桌面右栏打开会话聊天（来自中栏消息列表点击）。
+  void _openDesktopConversation(ImConversation conv) {
+    setState(() {
+      _desktopConv = conv;
+      _desktopProfileUserId = null;
+      _desktopShowMe = false;
+      index = 0;
+    });
+  }
+
+  /// 桌面右栏打开好友资料（来自中栏通讯录点击）。
+  void _openDesktopFriend(int userId) {
+    setState(() {
+      _desktopProfileUserId = userId;
+      _desktopConv = null;
+      _desktopShowMe = false;
+      index = 1;
+    });
+  }
+
+  /// 桌面右栏打开「我的」面板（Rail 头像 / 底部设置点击）。
+  void _openDesktopMe() {
+    setState(() {
+      _desktopShowMe = true;
+      _desktopConv = null;
+      _desktopProfileUserId = null;
+    });
+  }
+
+  /// 桌面右栏内容：聊天 / 好友资料 / 我的 / 空态（互斥）。
+  Widget _buildDesktopRightPanel(BuildContext context, ThemeColors colors) {
+    final conv = _desktopConv;
+    if (conv != null) {
+      return ChatPage(
+        key: ValueKey('desktop_chat_${conv.type.value}_${conv.targetId}'),
+        type: conv.type,
+        targetId: conv.targetId,
+        title: conv.title,
+        avatar: conv.avatar,
+        embedded: true,
+      );
+    }
+    final profileUserId = _desktopProfileUserId;
+    if (profileUserId != null) {
+      return UserProfilePage(
+        key: ValueKey('desktop_profile_$profileUserId'),
+        userId: profileUserId,
+        embedded: true,
+        onSendMessage: (userId, name, avatar) {
+          setState(() {
+            _desktopProfileUserId = null;
+            _desktopConv = ImConversation(
+              type: ImConversationType.private,
+              targetId: userId,
+              title: name,
+              avatar: avatar,
+              lastMessageText: '',
+              lastMessageTime: null,
+              unreadCount: 0,
+              pinned: false,
+              silent: false,
+            );
+          });
+        },
+      );
+    }
+    if (_desktopShowMe) {
+      // MePage 自带渐变头部，直接嵌入右栏
+      return const MePage();
+    }
+    return _DesktopEmptyPlaceholder(colors: colors);
+  }
+}
+
+/// 桌面左栏导航 Rail（微信 PC 风格）：
+/// 深色竖条（不随明暗主题大变），顶部头像 + 消息/通讯录图标，底部设置。
+class _DesktopRail extends StatelessWidget {
+  /// 当前选中项：0=消息 1=通讯录。
+  final int selectedIndex;
+
+  /// 消息未读总数（图标角标）。
+  final int totalUnread;
+
+  /// 好友申请待办数（图标角标）。
+  final int pendingRequests;
+
+  final ValueChanged<int> onSelect;
+  final VoidCallback onAvatarTap;
+  final VoidCallback onSettingsTap;
+
+  const _DesktopRail({
+    required this.selectedIndex,
+    required this.totalUnread,
+    required this.pendingRequests,
+    required this.onSelect,
+    required this.onAvatarTap,
+    required this.onSettingsTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    // 微信 PC：导航条深灰，不随内容区主题大变
+    final railBg = isDark ? const Color(0xFF17171A) : const Color(0xFF2E2E2E);
+    final unselected = const Color(0xFF9C9C9C);
+    final selected = AppColors.lime;
+    final nickname = (AuthManager.instance.nickname ?? '').trim();
+    return Container(
+      width: 64,
+      color: railBg,
+      child: Column(
+        children: [
+          const SizedBox(height: 18),
+          // 头像：点击打开「我的」面板
+          GestureDetector(
+            onTap: onAvatarTap,
+            child: ImAvatar(
+              src: AuthManager.instance.avatar ?? '',
+              name: nickname.isNotEmpty ? nickname : '我',
+              size: 36,
+              borderRadius: BorderRadius.circular(8),
+            ),
+          ),
+          const SizedBox(height: 22),
+          _railItem(
+            icon: Icons.chat_bubble_outline,
+            selectedIcon: Icons.chat_bubble,
+            label: '消息',
+            selected: selectedIndex == 0,
+            selectedColor: selected,
+            unselectedColor: unselected,
+            badge: totalUnread,
+            onTap: () => onSelect(0),
+          ),
+          const SizedBox(height: 10),
+          _railItem(
+            icon: Icons.person_outline,
+            selectedIcon: Icons.person,
+            label: '通讯录',
+            selected: selectedIndex == 1,
+            selectedColor: selected,
+            unselectedColor: unselected,
+            badge: pendingRequests,
+            onTap: () => onSelect(1),
+          ),
+          const Spacer(),
+          // 底部设置：打开「我的」面板
+          _railIcon(
+            icon: Icons.settings_outlined,
+            color: unselected,
+            onTap: onSettingsTap,
+          ),
+          const SizedBox(height: 18),
+        ],
+      ),
+    );
+  }
+
+  /// 图标按钮（无角标）。
+  Widget _railIcon({
+    required IconData icon,
+    required Color color,
+    required VoidCallback onTap,
+  }) =>
+      Tooltip(
+        message: '设置',
+        waitDuration: const Duration(milliseconds: 500),
+        child: IconButton(
+          onPressed: onTap,
+          icon: Icon(icon, size: 24, color: color),
+        ),
+      );
+
+  /// 带选中态 + 角标的导航项（微信 PC：选中图标变色，无大背景块）。
+  Widget _railItem({
+    required IconData icon,
+    required IconData selectedIcon,
+    required String label,
+    required bool selected,
+    required Color selectedColor,
+    required Color unselectedColor,
+    required int badge,
+    required VoidCallback onTap,
+  }) =>
+      Tooltip(
+        message: label,
+        waitDuration: const Duration(milliseconds: 500),
+        child: GestureDetector(
+          onTap: onTap,
+          child: SizedBox(
+            width: 48,
+            height: 48,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Center(
+                  child: Icon(
+                    selected ? selectedIcon : icon,
+                    size: 26,
+                    color: selected ? selectedColor : unselectedColor,
+                  ),
+                ),
+                if (badge > 0)
+                  Positioned(
+                    top: 4,
+                    right: 0,
+                    child: _TabBadge(count: badge),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      );
+}
+
+/// 桌面右栏空态占位（微信 PC 首页大 Logo + slogan 风格）。
+class _DesktopEmptyPlaceholder extends StatelessWidget {
+  final ThemeColors colors;
+
+  const _DesktopEmptyPlaceholder({required this.colors});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.forum_outlined, size: 88, color: colors.muted),
+          const SizedBox(height: 20),
+          Text(
+            'IM，让沟通更简单',
+            style: TextStyle(fontSize: 16, color: colors.muted),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '从左侧选择一个会话开始聊天',
+            style: TextStyle(fontSize: 13, color: colors.muted),
+          ),
+        ],
       ),
     );
   }

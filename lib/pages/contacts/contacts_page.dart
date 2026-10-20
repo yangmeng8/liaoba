@@ -7,6 +7,7 @@ import '../../services/im_api.dart';
 import '../../services/im_websocket.dart';
 import '../../shared/app_colors.dart';
 import '../../shared/app_theme.dart';
+import '../../shared/desktop_layout.dart';
 import '../../shared/im_avatar.dart';
 import '../../shared/widgets.dart';
 import '../../stores/presence_store.dart';
@@ -23,7 +24,11 @@ import 'user_profile_page.dart';
 /// 搜索（六路拼音命中）+ 新的朋友/群聊入口 + 好友字母分桶列表 + 右侧索引条；
 /// 搜索态隐藏入口和索引条，平铺匹配结果。
 class ContactsPage extends StatefulWidget {
-  const ContactsPage({super.key});
+  /// 桌面三栏布局：好友点击回调（右栏打开资料页）。
+  /// null 时走移动端整页 push。
+  final ValueChanged<int>? onOpenFriend;
+
+  const ContactsPage({super.key, this.onOpenFriend});
 
   @override
   State<ContactsPage> createState() => _ContactsPageState();
@@ -134,6 +139,25 @@ class _ContactsPageState extends State<ContactsPage> {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final searching = _keyword.trim().isNotEmpty;
+    // 桌面三栏：中栏小头部（搜索 + 添加）复用搜索控制器
+    if (isDesktopLayout(context)) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _buildDesktopHeader(colors),
+          Expanded(
+            child: searching
+                ? _buildFlatList(colors)
+                : Stack(
+                    children: [
+                      _buildBucketList(colors),
+                      _buildIndexBar(colors),
+                    ],
+                  ),
+          ),
+        ],
+      );
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -160,6 +184,67 @@ class _ContactsPageState extends State<ContactsPage> {
                 ),
         ),
       ],
+    );
+  }
+
+  /// 桌面中栏头部（微信 PC 风格）：紧凑搜索框 + 添加按钮。
+  Widget _buildDesktopHeader(ThemeColors colors) {
+    return Container(
+      color: colors.card,
+      padding: const EdgeInsets.fromLTRB(12, 10, 4, 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: Container(
+              height: 34,
+              decoration: BoxDecoration(
+                color: colors.bg,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  const SizedBox(width: 10),
+                  Icon(Icons.search, size: 18, color: colors.muted),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: TextField(
+                      controller: _searchCtrl,
+                      onChanged: (_) => setState(() {}),
+                      decoration: InputDecoration(
+                        isCollapsed: true,
+                        border: InputBorder.none,
+                        hintText: '搜索',
+                        hintStyle:
+                            TextStyle(fontSize: 14, color: colors.muted),
+                      ),
+                      style: TextStyle(fontSize: 14, color: colors.text),
+                    ),
+                  ),
+                  if (_keyword.isNotEmpty)
+                    GestureDetector(
+                      onTap: () {
+                        _searchCtrl.clear();
+                        setState(() {});
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.only(right: 10),
+                        child:
+                            Icon(Icons.cancel, size: 16, color: colors.muted),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          Builder(
+            builder: (btnCtx) => IconButton(
+              onPressed: () => _showAddMenu(btnCtx),
+              icon: const Icon(Icons.add_circle_outline, size: 22),
+              color: colors.text,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -221,7 +306,10 @@ class _ContactsPageState extends State<ContactsPage> {
         itemCount: list.length,
         separatorBuilder: (_, _) =>
             Divider(height: 1, indent: 78, color: colors.divider),
-        itemBuilder: (context, i) => _FriendTile(friend: list[i]),
+        itemBuilder: (context, i) => _FriendTile(
+          friend: list[i],
+          onTap: widget.onOpenFriend,
+        ),
       ),
     );
   }
@@ -323,7 +411,10 @@ class _ContactsPageState extends State<ContactsPage> {
                       if (i > 0)
                         Divider(
                             height: 1, indent: 78, color: colors.divider),
-                      _FriendTile(friend: bucket.friends[i]),
+                      _FriendTile(
+                        friend: bucket.friends[i],
+                        onTap: widget.onOpenFriend,
+                      ),
                     ],
                   ],
                 ),
@@ -470,17 +561,27 @@ class _EntryTile extends StatelessWidget {
 class _FriendTile extends StatelessWidget {
   final ImFriend friend;
 
-  const _FriendTile({required this.friend});
+  /// 桌面三栏：点击回调（右栏打开资料页）；null 走移动端整页 push。
+  final ValueChanged<int>? onTap;
+
+  const _FriendTile({required this.friend, this.onTap});
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
     return InkWell(
-      onTap: () => Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => UserProfilePage(userId: friend.friendUserId),
-        ),
-      ),
+      onTap: () {
+        // 桌面三栏：回调右栏打开；移动端整页 push
+        if (onTap != null) {
+          onTap!(friend.friendUserId);
+          return;
+        }
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => UserProfilePage(userId: friend.friendUserId),
+          ),
+        );
+      },
       child: SizedBox(
         height: 58,
         child: Row(

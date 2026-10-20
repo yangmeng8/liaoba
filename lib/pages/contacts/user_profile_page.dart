@@ -30,11 +30,20 @@ class UserProfilePage extends StatefulWidget {
   /// 来源附加上下文（群聊入口=群名，随申请附带）。
   final String sourceExtra;
 
+  /// 桌面三栏布局内嵌模式：嵌入右栏展示时隐藏返回按钮。
+  final bool embedded;
+
+  /// 桌面三栏布局：「发消息」回调（右栏切换到聊天）。
+  /// null 时走移动端整页 push。参数：userId、展示名、头像。
+  final void Function(int userId, String name, String avatar)? onSendMessage;
+
   const UserProfilePage({
     super.key,
     required this.userId,
     this.addSource = 1,
     this.sourceExtra = '',
+    this.embedded = false,
+    this.onSendMessage,
   });
 
   @override
@@ -419,12 +428,15 @@ class _UserProfilePageState extends State<UserProfilePage> {
                   children: [
                     Align(
                       alignment: Alignment.centerLeft,
-                      child: IconButton(
-                        tooltip: '返回',
-                        onPressed: () => Navigator.of(context).pop(),
-                        icon: Icon(Icons.chevron_left,
-                            size: 34, color: colors.surfaceText),
-                      ),
+                      // 内嵌模式无路由可返回：占位保持标题居中
+                      child: widget.embedded
+                          ? const SizedBox(width: 48)
+                          : IconButton(
+                              tooltip: '返回',
+                              onPressed: () => Navigator.of(context).pop(),
+                              icon: Icon(Icons.chevron_left,
+                                  size: 34, color: colors.surfaceText),
+                            ),
                     ),
                     Text(
                       _relation == _Relation.self ? '我的信息' : '用户资料',
@@ -668,6 +680,12 @@ class _UserProfilePageState extends State<UserProfilePage> {
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         ),
         onPressed: () {
+          // 桌面三栏：回调右栏切聊天；移动端整页 push
+          final handler = widget.onSendMessage;
+          if (handler != null) {
+            handler(widget.userId, _displayName, _user?.avatar ?? '');
+            return;
+          }
           Navigator.of(context).push(
             MaterialPageRoute(
               builder: (_) => ChatPage(
