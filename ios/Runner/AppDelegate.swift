@@ -46,9 +46,14 @@ import UserNotifications
   /// 但 Dart 还没 setMethodCallHandler，此时 invokeMethod 会被直接丢弃
   /// —— 冷启动点「接听」就是这样丢的（表现：App 起来了却没有通话页）。
   private var dartCallkitHandlerReady = false
-  /// 「点了接听但 App 还没回到前台」标记：CallKit 通话必须先保持 active，
-  /// 系统才会把 App 切到前台；等 App 真的 active 了再收起系统通话界面。
-  private var pendingEndCallKitAfterActivation = false
+  /// CallKit 通话的生命周期 = 真实通话的生命周期。
+  ///
+  /// 之前是「App 回到前台 / 通话页上屏就立刻 reportCall(endedAt:) 收起系统来电界面」，
+  /// 真机验证下来这条路是错的：锁屏接听时系统并不会因为「通话还在 active」就把 App
+  /// 切到前台（iOS 26.3 实测），收得太早反而让锁屏上连「通话中」的界面都没了，
+  /// 用户解锁后无处可点、也看不出电话还在。
+  /// 现在的做法：接听后一直保持通话 active，只在通话真的结束（App 内挂断 /
+  /// 对方挂断 / 用户从系统界面挂断）时才收起——这也是系统对 VoIP 应用的预期用法。
   /// 最近一通来电 payload 的持久化 key：冷启动点「接听」时进程内的
   /// currentCallPayload 已丢失（上次进程早就被系统回收），只能靠它还原 roomId
   private let pendingCallPayloadKey = "im_callkit_pending_call_payload"
@@ -96,6 +101,9 @@ import UserNotifications
         switch call.method {
         case "endCall":
           // Flutter 侧通话结束（对方挂断/超时/取消）→ 同步结束 CallKit 界面
+          // 通话结束同时释放通话音频会话，否则 .playAndRecord 会一直占用着
+          // （其它 App 的音乐被压低、麦克风指示灯不灭）。
+          self._deactivateCallAudioSession(reason: "endCall")
           if let uuid = self.currentCallUuid {
             // iOS 26 SDK：reportCallEnded 改名 reportCall(with:endedAt:reason:)
             self.callProvider?.reportCall(
@@ -106,7 +114,6 @@ import UserNotifications
           }
           self.currentCallUuid = nil
           self.currentCallPayload = [:]
-          self.pendingEndCallKitAfterActivation = false
           self._clearPersistedCallPayload()
           self._playRingback(false)
           result(nil)
@@ -168,10 +175,11 @@ import UserNotifications
         case "getDiagLogPath":
           result(diagLogURL()?.path)
         case "callPageShown":
-          // Dart 侧通话页已经 push 上屏：此时才收起系统来电界面。
-          // CallKit 通话保持 active 是系统把 App 切到前台的前提，
-          // 过早收起（旧实现固定 4 秒）会在冷启动慢时打断这个过程。
-          self._endCallKitCallIfPending(reason: "callPageShown")
+          // Dart 侧通话页已经 push 上屏。系统来电界面不再在这里收起：
+          // CallKit 通话与真实通话同生命周期（见 currentCallUuid 上的说明），
+          // 锁屏/后台接听后系统可能还没把 App 切到前台，收起系统界面会让
+          // 用户解锁后连「通话中」的入口都没有。
+          imLog("[CallKit] Dart 侧通话页已上屏")
           result(nil)
         default:
           result(FlutterMethodNotImplemented)
@@ -245,12 +253,20 @@ import UserNotifications
   override func applicationDidBecomeActive(_ application: UIApplication) {
     super.applicationDidBecomeActive(application)
     _rebindNotificationDelegate(reason: "applicationDidBecomeActive")
-    // 从 CallKit 接听进来的：App 已经到前台，收起系统通话界面交给 App 内通话页
-    if pendingEndCallKitAfterActivation {
-      _endCallKitCallIfPending(reason: "applicationDidBecomeActive")
-    }
+    imLog("[CallKit] App 已进入前台(applicationDidBecomeActive)，"
+      + "callActive=\(currentCallUuid != nil)")
+    // 注意：这里不再收起 CallKit 通话界面。通话还在进行时收起它，用户再锁屏
+    // 就没有系统通话界面可用了；通话结束由 Dart 侧 endCall / 用户挂断触发。
     // 极光 SDK setup 可能覆盖通知分类，回到前台时补齐
     _registerCallNotificationCategory()
+  }
+
+  override func applicationWillEnterForeground(_ application: UIApplication) {
+    super.applicationWillEnterForeground(application)
+    // 锁屏接听链路的关键节点：系统把 App 拉起时先走 willEnterForeground，
+    // 之前日志里缺失这一行 = App 根本没被系统拉起（或很晚才拉起）。
+    imLog("[CallKit] App 即将回到前台(applicationWillEnterForeground)，"
+      + "callActive=\(currentCallUuid != nil)")
   }
 
   override func applicationDidEnterBackground(_ application: UIApplication) {
@@ -923,13 +939,17 @@ extension AppDelegate: PKPushRegistryDelegate {
       completion()
       return
     }
-    let data = _parseCallPayload(userInfo)
+    var data = _parseCallPayload(userInfo)
     guard let roomId = data["roomId"] as? String, !roomId.isEmpty else {
       // 非来电 VoIP 推送：直接放行（苹果要求 report，但极光仅来电场景发 VoIP）
       imLog("[CallKit] VoIP 推送缺少 roomId，忽略")
       completion()
       return
     }
+    // 标记这通来电是否由 CallKit 承载系统来电界面（后台/锁屏场景）：
+    // 那种场景下铃声由系统播，App 内再播一遍会占着 .playback 音频会话，
+    // 与接听后的通话会话冲突（接听后 App 不进前台 / 没有声音）。
+    data["_callkitSystemUI"] = UIApplication.shared.applicationState != .active
     // 持久化来电信息：用户可能在 App 被系统回收之后才点「接听」，
     // 那时进程内的 payload 已经没了，只能靠这份存档还原 roomId 进通话页
     UserDefaults.standard.set(data, forKey: pendingCallPayloadKey)
@@ -972,7 +992,16 @@ extension AppDelegate: PKPushRegistryDelegate {
 extension AppDelegate: CXProviderDelegate {
   /// 用户点「接听」：App 自动回前台，通知 Flutter 执行接听
   func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
-    imLog("[CallKit] 用户点击接听")
+    imLog("[CallKit] 用户点击接听, appState=\(UIApplication.shared.applicationState.rawValue)"
+      + "(0=active,1=inactive,2=background)")
+    // 1) 先停掉 App 自己的振铃/回铃音：它们用 .playback 音频会话并 setActive(true)，
+    //    和下面的通话音频会话是互斥的。App 自己把会话占着，系统激活通话会话会失败，
+    //    通话进不了 active，表现就是「滑动接听后没进 App / 通话页不弹 / 对方一直通话中」。
+    _playRingtone(false)
+    _playRingback(false)
+    // 2) 在接听回调里配置并激活通话音频会话（Apple 对 CXAnswerCallAction 的要求）。
+    //    通话音频会话 active 是系统把 App 切到前台、并允许后台收音放音的前提。
+    _activateCallAudioSession(reason: "answer")
     // 冷启动场景：进程内的 payload 已随上个进程销毁，从存档还原
     if currentCallPayload.isEmpty,
        let saved = UserDefaults.standard.dictionary(forKey: pendingCallPayloadKey) {
@@ -990,18 +1019,19 @@ extension AppDelegate: CXProviderDelegate {
     }
     UserDefaults.standard.set(true, forKey: pendingCallAnsweredKey)
     action.fulfill()
-    // 关键：这里不能立刻 reportCall(endedAt:)。CallKit 通话处于 active 状态
-    // 是系统把 App 切到前台（解锁/从后台拉起）的依据；一旦马上结束，
-    // 系统就不激活 App，表现就是「点了接听却没跳进 IM」。
-    // 先保持 active，等 App 真的回到前台 / 兜底 4 秒后再收起系统通话界面。
+    // 通话保持 active 直到通话真的结束（见 currentCallUuid 上的说明）。
+    // 真机日志（10-22 17:28）证明：锁屏接听后系统并不会因为通话 active 就把 App
+    // 切到前台，收起通话界面也换不来前台；所以这里既不主动收起，也不设超时收起——
+    // 留着通话界面，用户解锁后能从锁屏的「通话中」界面点进 App。
     currentCallUuid = action.callUUID
-    pendingEndCallKitAfterActivation = true
-    // 兜底收起时间放宽到 10 秒：冷启动（引擎+Dart 初始化）慢的情况下，
-    // 4 秒时 App 可能还没上屏，这时收起 CallKit 会打断系统把 App 切到前台的过程。
-    // 正常情况下 Dart 侧通话页 push 出来会立刻调 callPageShown 提前收起。
-    DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
-      self?._endCallKitCallIfPending(reason: "answerTimeout")
-    }
+    // 3) 尝试把 App 拉回前台（两套手段都试，成败都记日志）。
+    //    锁屏状态（isProtectedDataAvailable=false）下系统不会把 App 显示出来，
+    //    只能等用户解锁；解锁时系统会自动把 App 切到前台，日志里能看到
+    //    applicationWillEnterForeground / applicationDidBecomeActive。
+    imLog("[CallKit] 接听时设备锁屏=\(!UIApplication.shared.isProtectedDataAvailable)"
+      + "（true 表示锁屏，系统不会显示 App，需用户解锁）")
+    _requestForegroundIfNeeded(reason: "answer")
+    _openSelfIfPossible(reason: "answer")
   }
 
   /// 用户点「拒接」/「挂断」：通知 Flutter 拒绝
@@ -1011,24 +1041,7 @@ extension AppDelegate: CXProviderDelegate {
     action.fulfill()
     currentCallUuid = nil
     currentCallPayload = [:]
-    pendingEndCallKitAfterActivation = false
     _clearPersistedCallPayload()
-  }
-
-  /// 收起系统通话界面（App 内通话页接手）。幂等：没有待收起的通话时什么也不做。
-  func _endCallKitCallIfPending(reason: String) {
-    guard pendingEndCallKitAfterActivation else { return }
-    pendingEndCallKitAfterActivation = false
-    if let uuid = currentCallUuid {
-      // iOS 26 SDK：reportCallEnded 改名 reportCall(with:endedAt:reason:)
-      callProvider?.reportCall(
-        with: uuid,
-        endedAt: nil,
-        reason: CXCallEndedReason.remoteEnded
-      )
-      imLog("[CallKit] 已收起系统通话界面（reason=\(reason)，通话交由 App 内页面）")
-    }
-    currentCallUuid = nil
   }
 
   private func _clearPersistedCallPayload() {
@@ -1037,11 +1050,106 @@ extension AppDelegate: CXProviderDelegate {
     UserDefaults.standard.removeObject(forKey: pendingCallAnsweredKey)
   }
 
+  /// 激活通话音频会话（CallKit 接听回调里必须做的一步）。
+  /// 用 .playAndRecord + .voiceChat：既能收音也能放音，路由跟随系统（听筒/扬声器/
+  /// 蓝牙）。LiveKit 进房后会用同样的 category 再配置一次，不冲突。
+  private func _activateCallAudioSession(reason: String) {
+    let session = AVAudioSession.sharedInstance()
+    do {
+      try session.setCategory(
+        .playAndRecord,
+        mode: .voiceChat,
+        options: [.allowBluetooth, .defaultToSpeaker]
+      )
+      imLog("[CallKit] 通话音频会话 category 已设置(reason=\(reason)): "
+        + "category=\(session.category.rawValue), mode=\(session.mode.rawValue)")
+    } catch {
+      imLog("[CallKit] ❌ 通话音频会话 category 设置失败(reason=\(reason)): "
+        + "\(error.localizedDescription)")
+    }
+    // 激活：CallKit 通话的音频会话由系统接管（激活成功会回调 didActivate）。
+    // App 侧在后台/锁屏时这一步会被系统拒绝（日志里的 Session activation failed），
+    // 属于预期——系统随后会自己激活并回调 didActivate，所以这里只记录不报错。
+    do {
+      try session.setActive(true)
+      imLog("[CallKit] 通话音频会话 setActive(true) 成功(reason=\(reason))")
+    } catch {
+      imLog("[CallKit] 通话音频会话 setActive(true) 被拒(reason=\(reason)): "
+        + "\(error.localizedDescription)（等待系统 didActivate）")
+    }
+  }
+
+  /// 释放通话音频会话（通话结束/被拒接时）。
+  private func _deactivateCallAudioSession(reason: String) {
+    do {
+      try AVAudioSession.sharedInstance().setActive(
+        false,
+        options: .notifyOthersOnDeactivation
+      )
+      imLog("[CallKit] 通话音频会话已释放(reason=\(reason))")
+    } catch {
+      // 通话音频会话由系统（CallKit）接管时，App 侧的 setActive(false) 会被拒，
+      // 随后系统会回调 didDeactivate 把会话收掉，属于预期，不当成错误。
+      imLog("[CallKit] 通话音频会话 setActive(false) 被拒(reason=\(reason)): "
+        + "\(error.localizedDescription)（等待系统 didDeactivate）")
+    }
+  }
+
+  /// 主动请求系统把 App 切到前台。
+  ///
+  /// 锁屏/后台接听时，系统「应该」把 App 拉到前台，但实测（iOS 26.3 真机）
+  /// 有时不会——App 一直在后台跑，通话页虽然 push 出来了但用户看不到。
+  /// 这里对已有的窗口场景发一次激活请求，让系统把 App 拉到前台；
+  /// 请求失败（例如设备仍锁屏）不影响通话本身，日志里会留痕便于排查。
+  private func _requestForegroundIfNeeded(reason: String) {
+    let app = UIApplication.shared
+    let state = app.applicationState.rawValue
+    imLog("[CallKit] 请求 App 到前台(reason=\(reason)), appState=\(state)"
+      + "(0=active,1=inactive,2=background), scenes=\(app.connectedScenes.count)")
+    guard app.applicationState != .active else { return }
+    let scene = app.connectedScenes
+      .compactMap { $0 as? UIWindowScene }
+      .first { $0.activationState != .unattached }
+    guard let scene = scene else {
+      imLog("[CallKit] 没有可激活的窗口场景，无法请求前台")
+      return
+    }
+    app.requestSceneSessionActivation(
+      scene.session,
+      userActivity: nil,
+      options: nil
+    ) { error in
+      imLog("[CallKit] ❌ requestSceneSessionActivation 失败(reason=\(reason)): "
+        + "\(error.localizedDescription)")
+    }
+  }
+
+  /// 用自身 URL scheme 打开一次 App（"liaoba://call"）。
+  ///
+  /// 真机验证：requestSceneSessionActivation 在单场景 App 上直接被系统拒绝
+  /// （「当前设备不支持多个场景」），所以再试一条路——open 自己的 scheme。
+  /// 设备解锁状态下系统会因此把 App 拉到前台；锁屏状态下会被拒（拿不到前台，
+  /// 属于 iOS 的锁屏限制），日志里会写明结果，便于判断该走哪条路。
+  private func _openSelfIfPossible(reason: String) {
+    guard let url = URL(string: "liaoba://call") else { return }
+    imLog("[CallKit] 尝试用自身 scheme 拉起 App(reason=\(reason)): \(url.absoluteString)")
+    UIApplication.shared.open(url, options: [:]) { ok in
+      imLog("[CallKit] open(自身 scheme) 结果(reason=\(reason)): ok=\(ok)")
+    }
+  }
+
   func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
-    // LiveKit 自管音频会话，无需处理
+    // 通话音频会话已 active：这是系统「通话真的接通了」的信号，也是把 App
+    // 切到前台的时机（锁屏接听时系统有时不主动拉起，这里再请求一次）。
+    imLog("[CallKit] 通话音频会话已激活(系统回调 didActivate)，"
+      + "appState=\(UIApplication.shared.applicationState.rawValue)"
+      + "(0=active,1=inactive,2=background)，锁屏=\(!UIApplication.shared.isProtectedDataAvailable)")
+    _requestForegroundIfNeeded(reason: "didActivate")
+    _openSelfIfPossible(reason: "didActivate")
   }
 
   func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {
+    imLog("[CallKit] 通话音频会话已释放(系统回调 didDeactivate)")
   }
 
   func provider(_ provider: CXProvider, timedOutPerforming action: CXAction) {
