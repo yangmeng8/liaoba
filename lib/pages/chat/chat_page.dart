@@ -1437,6 +1437,8 @@ class _ChatPageState extends State<ChatPage> {
       final ext = isMp4 ? '.m4a' : '.webm';
 
       final tmpDir = await getTemporaryDirectory();
+      // macOS 沙盒下临时目录可能尚未创建，先确保存在（幂等）
+      await tmpDir.create(recursive: true);
       final cacheName = url.replaceAll(RegExp(r'[^A-Za-z0-9]'), '');
       final file = File('${tmpDir.path}/voiceplay_$cacheName$ext');
       if (!await file.exists()) {

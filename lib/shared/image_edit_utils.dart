@@ -159,8 +159,12 @@ Future<Uint8List?> pushImageEditor(BuildContext context, String filePath) {
 
 /// 编辑后字节写入临时文件，返回路径。
 Future<String> saveEditedImage(Uint8List bytes) async {
+  final dir = await getTemporaryDirectory();
+  // macOS 沙盒下临时目录（Caches/<bundleId>）可能尚未创建，
+  // writeAsBytes 不建父目录会直接抛 PathNotFoundException
+  await dir.create(recursive: true);
   final path = p.join(
-    (await getTemporaryDirectory()).path,
+    dir.path,
     'edited_${DateTime.now().millisecondsSinceEpoch}.jpg',
   );
   await File(path).writeAsBytes(bytes);

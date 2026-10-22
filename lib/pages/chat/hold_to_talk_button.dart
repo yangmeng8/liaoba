@@ -78,6 +78,8 @@ class _HoldToTalkButtonState extends State<HoldToTalkButton> {
       _recordStart = DateTime.now();
       // 绝对路径：iOS 不解析相对路径（会落到沙箱根导致写失败），必须用临时目录拼接
       final tmpDir = await getTemporaryDirectory();
+      // macOS 沙盒下临时目录可能尚未创建，先确保存在（幂等）
+      await tmpDir.create(recursive: true);
       final path =
           '${tmpDir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
       await _recorder.start(
