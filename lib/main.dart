@@ -30,7 +30,7 @@ import 'shared/font_scale_manager.dart';
 import 'shared/im_avatar.dart';
 import 'shared/theme_manager.dart';
 
-/// 极光推送 AppKey。
+/// 极光推送 AppKey。 555
 /// 注意：AppKey 与包名绑定，需在极光后台为本包名（com.example.liaoba.im）
 /// 登记后才可收到推送；否则 getRegistrationID 一直为空。
 const String _jpushAppKey = 'd28a97237912f354ef3af622';
