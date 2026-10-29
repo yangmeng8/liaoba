@@ -246,8 +246,9 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
   Future<String?> _connectMedia(RtcCallData data, {int attempts = 3}) async {
     String? lastError;
     for (var attempt = 1; attempt <= attempts; attempt++) {
-      await _waitUntilForeground();
       try {
+        DiagLog.log('[RTC] 连接 LiveKit(第 $attempt/$attempts 次): url=${data.livekitUrl}, '
+            'foreground=$_isAppForeground');
         await liveKit.connect(
           url: data.livekitUrl,
           token: data.token,
@@ -274,15 +275,6 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
   String _briefError(Object e) {
     final text = e.toString().replaceAll('\n', ' ').trim();
     return text.length > 80 ? '${text.substring(0, 80)}…' : text;
-  }
-
-  /// 等 App 回到前台（最多 5 秒）：后台状态下媒体设备不可用。
-  Future<void> _waitUntilForeground() async {
-    if (_isAppForeground) return;
-    final deadline = DateTime.now().add(const Duration(seconds: 5));
-    while (!_isAppForeground && DateTime.now().isBefore(deadline)) {
-      await Future<void>.delayed(const Duration(milliseconds: 150));
-    }
   }
 
   /// LiveKit 对方进房（预连场景接通感知，等价 H5 ParticipantConnected →
@@ -444,7 +436,13 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
           '（${sameRoomHere ? '本端已有同房间通话 → 多端回声' : '本端无同房间通话 → 疑后端字段有误'}）: '
           'room=${signal.room}, inviterNickname=${signal.inviterNickname}');
     }
-    _receiveSignal(signal, fromPush: true);
+    // 锁屏/后台来电：原生已上报 CallKit 系统来电界面（铃声由系统播），
+    // 这里不再自己振铃，避免和通话音频会话抢会话。
+    _receiveSignal(
+      signal,
+      fromPush: true,
+      ringtone: normalized['_callkitSystemUI'] != true,
+    );
     if (!isActive) {
       // 静默失败排查用：身份校验不过 / 已在通话中 / 被去重，都会走到这里
       DiagLog.log('[RTC] 推送来电未能进入来电页（myUserId=$myUserId，'
@@ -459,7 +457,11 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
   /// [fromPush]：信令来自推送补入（按本机 deviceToken 定向下发）。
   /// 推送链路上「本人是否在 inviteeIds 名单里」无需校验——payload 字段语义/命名
   /// 与 WS 信令可能不一致，硬校验会把正常来电静默丢掉（点了接听没反应）。
-  void _receiveSignal(RtcSignalPayload signal, {bool fromPush = false}) {
+  void _receiveSignal(
+    RtcSignalPayload signal, {
+    bool fromPush = false,
+    bool ringtone = true,
+  }) {
     final myUserId = AuthManager.instance.userId ?? 0;
     // 「自己发起的回声」判定：inviterUserId 就是本人 → 这通电话是本人在别的端发起的
     // （WS 的 1601 会广播给所有参与方，包括主叫自己；同一账号多端登录时推送也会发到
@@ -500,7 +502,15 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
         }
         incomingSignal = signal;
         _stage = RtcStage.incoming;
-        _startRingtone(); // 被叫：来电页弹出即振铃（前台无通知声，App 内补）
+        if (ringtone) {
+          _startRingtone(); // 被叫：来电页弹出即振铃（前台无通知声，App 内补）
+        } else {
+          // 锁屏/后台来电由 CallKit 播系统铃声：App 内再播一遍会占用
+          // .playback 音频会话，和接听后的通话音频会话互斥（接听后没声音/
+          // 系统不把 App 切到前台）。
+          DiagLog.log('[RTC] 系统来电界面已由 CallKit 振铃，App 内不重复播铃: '
+              'room=${signal.room}');
+        }
         notifyListeners();
         _openCallPage();
         break;
@@ -592,6 +602,8 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
       _runningSince = DateTime.now();
       notifyListeners();
     }
+    DiagLog.log('[RTC] 进入通话(RUNNING): room=${data.room}, autoConnect=$autoConnect, '
+        'livekit已连接=${liveKit.connected}, foreground=$_isAppForeground');
     if (autoConnect && !liveKit.connected) {
       if (data.livekitUrl.isEmpty || data.token.isEmpty) {
         DiagLog.log('[RTC] 入房信息缺失: url="${data.livekitUrl}", token 长度=${data.token.length}');
@@ -599,16 +611,58 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
         await hangup();
         return;
       }
+      // 直接连，不等 App 回到前台：真机日志（10-22 17:45）里，锁屏接听后
+      // CallKit 的通话音频会话（didActivate）已经把音频链路准备好了，后台直连
+      // 是成功的；之前那版先「等前台最多 10 秒」反而让接听后要等 12 秒才连上
+      // （用户反馈「滑动接听 10 秒多后对方才接通」）。
       final connectError = await _connectMedia(data);
       if (connectError != null) {
+        // 还在后台：不能直接挂断（用户看到的就是「接了却断线，对方还在通话中」），
+        // 保留通话，等 App 回到前台时重连（见 didChangeAppLifecycleState）。
+        if (!_isAppForeground) {
+          DiagLog.log('[RTC] ⚠️ 媒体连接失败但 App 仍在后台，保留通话等待回前台重连: '
+              '$connectError');
+          _pendingMediaRetry = true;
+          _notifyToast('正在接通通话，请回到 App…');
+          return;
+        }
+        DiagLog.log('[RTC] ❌ 媒体连接失败（App 已在前台）: $connectError');
         _notifyToast('媒体连接失败：$connectError');
         // 媒体失败同样要通知服务端释放会话（hangup 在 running 阶段走 leave），
         // 否则房间一直挂在通话中，后续呼叫会被判「正在通话中」
         await hangup();
         return;
       }
+      DiagLog.log('[RTC] ✅ 媒体已连接: room=${data.room}, foreground=$_isAppForeground');
       notifyListeners();
     }
+  }
+
+  /// 后台接听时媒体没连上：等 App 回到前台后补连。
+  bool _pendingMediaRetry = false;
+
+  Future<void> _retryMediaOnResume() async {
+    if (!_pendingMediaRetry) return;
+    if (_stage != RtcStage.running || liveKit.connected) {
+      _pendingMediaRetry = false;
+      return;
+    }
+    final data = call;
+    if (data == null) {
+      _pendingMediaRetry = false;
+      return;
+    }
+    _pendingMediaRetry = false;
+    DiagLog.log('[RTC] App 回到前台，重连媒体: room=${data.room}');
+    final err = await _connectMedia(data);
+    if (err != null) {
+      DiagLog.log('[RTC] ❌ 回到前台后重连媒体仍失败: $err');
+      _notifyToast('媒体连接失败：$err');
+      await hangup();
+      return;
+    }
+    DiagLog.log('[RTC] ✅ 回到前台后媒体连接成功: room=${data.room}');
+    notifyListeners();
   }
 
   /// ==================== 挂断（按阶段分流，对齐 H5 hangup） ====================
@@ -702,6 +756,8 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _isAppForeground = state == AppLifecycleState.resumed;
     if (!_isAppForeground) return;
+    DiagLog.log('[RTC] App 回到前台: stage=$_stage, pendingMediaRetry=$_pendingMediaRetry, '
+        'livekit已连接=${liveKit.connected}');
     // 回到前台是「锁屏滑动接听 / App 被杀后点接听」链路统一的重试点：
     // 这两条路径上事件桥、导航器都可能当时还没就绪，除了补 push 通话页，
     // 还要重新取一次原生缓存的 CallKit 事件与持久化的来电存档。
@@ -710,6 +766,8 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
     if (isActive) {
       _openCallPage();
     }
+    // 后台接听时媒体没连上（媒体设备不可用）：回到前台立刻补连
+    unawaited(_retryMediaOnResume());
   }
 
   /// Android fullScreenIntent 来电全屏通知 channel（MainActivity 实现）。
