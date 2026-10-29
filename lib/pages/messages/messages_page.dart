@@ -7,6 +7,7 @@ import '../../models/im_conversation.dart';
 import '../../services/api_client.dart';
 import '../../shared/app_colors.dart';
 import '../../shared/app_theme.dart';
+import '../../shared/desktop_layout.dart';
 import '../../shared/group_avatar.dart';
 import '../../shared/im_avatar.dart';
 import '../../shared/widgets.dart';
@@ -19,7 +20,11 @@ import '../contacts/qr_scan_page.dart';
 
 /// 消息 Tab：会话列表（客户端由消息流聚合，对应 H5 conversationStore）。
 class MessagesPage extends StatefulWidget {
-  const MessagesPage({super.key});
+  /// 桌面三栏布局：会话点击回调（右栏打开聊天）。
+  /// null 时走移动端整页 push。
+  final ValueChanged<ImConversation>? onOpenConversation;
+
+  const MessagesPage({super.key, this.onOpenConversation});
 
   @override
   State<MessagesPage> createState() => _MessagesPageState();
@@ -113,6 +118,21 @@ class _MessagesPageState extends State<MessagesPage> {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
+    // 桌面三栏：中栏小头部（搜索 + 添加），列表占满剩余高度
+    if (isDesktopLayout(context)) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _buildDesktopHeader(colors),
+          Expanded(
+            child: ListenableBuilder(
+              listenable: ConversationStore.instance,
+              builder: (context, _) => _buildBody(colors),
+            ),
+          ),
+        ],
+      );
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start, // 强制整列子项左对齐，避免默认 center 居中
       children: [
@@ -149,6 +169,54 @@ class _MessagesPageState extends State<MessagesPage> {
           ),
         ),
       ],
+    );
+  }
+
+  /// 桌面中栏头部（微信 PC 风格）：紧凑搜索框 + 添加按钮。
+  Widget _buildDesktopHeader(ThemeColors colors) {
+    return Container(
+      color: colors.card,
+      padding: const EdgeInsets.fromLTRB(12, 10, 4, 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: Container(
+              height: 34,
+              decoration: BoxDecoration(
+                color: colors.bg,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  const SizedBox(width: 10),
+                  Icon(Icons.search, size: 18, color: colors.muted),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: TextField(
+                      onChanged: (kw) => setState(() => _keyword = kw),
+                      decoration: InputDecoration(
+                        isCollapsed: true,
+                        border: InputBorder.none,
+                        hintText: '搜索',
+                        hintStyle:
+                            TextStyle(fontSize: 14, color: colors.muted),
+                      ),
+                      style: TextStyle(fontSize: 14, color: colors.text),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Builder(
+            builder: (btnCtx) => IconButton(
+              onPressed: () => _showPlusMenu(btnCtx),
+              icon: const Icon(Icons.add_circle_outline, size: 22),
+              color: colors.text,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -220,7 +288,10 @@ class _MessagesPageState extends State<MessagesPage> {
               ),
             ],
           ),
-          child: _ConversationTile(conversation: list[i]),
+          child: _ConversationTile(
+            conversation: list[i],
+            onTap: widget.onOpenConversation,
+          ),
         ),
       ),
     );
@@ -372,7 +443,10 @@ class _DeleteConfirmDialog extends StatelessWidget {
 class _ConversationTile extends StatelessWidget {
   final ImConversation conversation;
 
-  const _ConversationTile({required this.conversation});
+  /// 桌面三栏：点击回调（右栏打开聊天）；null 走移动端整页 push。
+  final ValueChanged<ImConversation>? onTap;
+
+  const _ConversationTile({required this.conversation, this.onTap});
 
   /// 时间展示：今天 HH:mm；今年 MM-dd；更早 yyyy-MM-dd。
   String _formatTime(DateTime? time) {
@@ -394,6 +468,11 @@ class _ConversationTile extends StatelessWidget {
     final unread = conversation.unreadCount;
     return InkWell(
       onTap: () {
+        // 桌面三栏：回调右栏打开；移动端整页 push
+        if (onTap != null) {
+          onTap!(conversation);
+          return;
+        }
         Navigator.of(context).push(
           MaterialPageRoute(
             builder: (_) => ChatPage(

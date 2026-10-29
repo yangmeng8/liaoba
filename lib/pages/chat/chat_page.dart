@@ -59,12 +59,17 @@ class ChatPage extends StatefulWidget {
   final String title;
   final String avatar;
 
+  /// 桌面三栏布局内嵌模式：嵌入右栏展示时隐藏返回按钮
+  /// （无外层路由可 pop），其余行为不变。
+  final bool embedded;
+
   const ChatPage({
     super.key,
     required this.type,
     required this.targetId,
     required this.title,
     this.avatar = '',
+    this.embedded = false,
   });
 
   @override
@@ -1432,6 +1437,8 @@ class _ChatPageState extends State<ChatPage> {
       final ext = isMp4 ? '.m4a' : '.webm';
 
       final tmpDir = await getTemporaryDirectory();
+      // macOS 沙盒下临时目录可能尚未创建，先确保存在（幂等）
+      await tmpDir.create(recursive: true);
       final cacheName = url.replaceAll(RegExp(r'[^A-Za-z0-9]'), '');
       final file = File('${tmpDir.path}/voiceplay_$cacheName$ext');
       if (!await file.exists()) {
@@ -1910,14 +1917,17 @@ class _ChatPageState extends State<ChatPage> {
       child: SafeArea(
         bottom: false,
         child: SizedBox(
-          height: 48,
-          child: Row(
-            children: [
-              IconButton(
-                icon: const Icon(Icons.arrow_back_ios_new, size: 20),
-                color: colors.surfaceText,
-                onPressed: () => Navigator.of(context).pop(),
-              ),
+            height: 48,
+            child: Row(
+              children: [
+                // 内嵌模式无路由可返回：占位保持标题居中
+                widget.embedded
+                    ? const SizedBox(width: 48)
+                    : IconButton(
+                        icon: const Icon(Icons.arrow_back_ios_new, size: 20),
+                        color: colors.surfaceText,
+                        onPressed: () => Navigator.of(context).pop(),
+                      ),
               Expanded(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,

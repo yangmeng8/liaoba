@@ -26,10 +26,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
 
   FlutterWindow window(project);
   Win32Window::Point origin(10, 10);
-  Win32Window::Size size(1280, 720);
-  if (!window.Create(L"liaoba", origin, size)) {
+  // 桌面版窗口：默认 1080x720，最小 480x600（窄窗口回落手机布局）
+  // 参数对齐 macOS 版（MainFlutterWindow.swift）。
+  Win32Window::Size size(1080, 720);
+  if (!window.Create(L"IM", origin, size)) {
     return EXIT_FAILURE;
   }
+  window.SetMinSize(Win32Window::Size(480, 600));
   window.SetQuitOnClose(true);
 
   ::MSG msg;

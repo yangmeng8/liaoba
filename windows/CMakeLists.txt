@@ -32,6 +32,10 @@ set(CMAKE_CXX_FLAGS_PROFILE "${CMAKE_CXX_FLAGS_RELEASE}")
 # Use Unicode for all projects.
 add_definitions(-DUNICODE -D_UNICODE)
 
+# Treat source files as UTF-8 to avoid C4819 warnings on non-English Windows
+# systems (plugin sources contain UTF-8 characters, e.g. em dashes).
+add_compile_options(/utf-8)
+
 # Compilation settings that should be applied to most targets.
 #
 # Be cautious about adding new options here, as plugins use this function by

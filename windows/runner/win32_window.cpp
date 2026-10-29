@@ -179,6 +179,16 @@ Win32Window::MessageHandler(HWND hwnd,
                             WPARAM const wparam,
                             LPARAM const lparam) noexcept {
   switch (message) {
+    case WM_GETMINMAXINFO: {
+      if (min_width_ > 0 && min_height_ > 0) {
+        double scale_factor = FlutterDesktopGetDpiForHWND(hwnd) / 96.0;
+        auto* info = reinterpret_cast<MINMAXINFO*>(lparam);
+        info->ptMinTrackSize.x = Scale(min_width_, scale_factor);
+        info->ptMinTrackSize.y = Scale(min_height_, scale_factor);
+      }
+      return 0;
+    }
+
     case WM_DESTROY:
       window_handle_ = nullptr;
       Destroy();
@@ -261,6 +271,11 @@ HWND Win32Window::GetHandle() {
 
 void Win32Window::SetQuitOnClose(bool quit_on_close) {
   quit_on_close_ = quit_on_close;
+}
+
+void Win32Window::SetMinSize(const Size& size) {
+  min_width_ = size.width;
+  min_height_ = size.height;
 }
 
 bool Win32Window::OnCreate() {
