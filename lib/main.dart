@@ -18,6 +18,7 @@ import 'rtc/rtc_controller.dart';
 import 'services/auth_api.dart';
 import 'services/auth_manager.dart';
 import 'services/chat_push_service.dart';
+import 'services/desktop_notify_service.dart';
 import 'services/im_websocket.dart';
 import 'services/jpush_registration_upload.dart';
 import 'services/push_service.dart';
@@ -62,6 +63,8 @@ Future<void> main() async {
     AuthApi.loadUserProfile().catchError((Object _) {});
   }
   await _initPush();
+  // 桌面端：任务栏未读角标 + 系统 Toast + 新消息提示音（移动端自动忽略）
+  DesktopNotifyService.instance.init();
   runApp(const LiaobaApp());
   // 冷启动点「接听」：原生 CallKit 事件在 Dart/导航器就绪前就到达，
   // 首帧后再取一次缓存事件，否则来电页 push 不出来（跳进 App 却停在首页）

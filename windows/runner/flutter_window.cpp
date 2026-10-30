@@ -1,6 +1,10 @@
 #include "flutter_window.h"
 
 #include <optional>
+#include <string>
+
+#include <flutter/standard_method_codec.h>
+#include <mmsystem.h>
 
 #include "flutter/generated_plugin_registrant.h"
 
@@ -26,6 +30,46 @@ bool FlutterWindow::OnCreate() {
   }
   RegisterPlugins(flutter_controller_->engine());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
+
+  // 桌面通知辅助通道：
+  // - playSound：播放 assets/sounds/notify.wav（新消息提示音）
+  // - bringToFront：点击系统 Toast 后把窗口还原并带到前台
+  desktop_notify_channel_ =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(), "im/desktop_notify",
+          &flutter::StandardMethodCodec::GetInstance());
+  desktop_notify_channel_->SetMethodCallHandler(
+      [this](const flutter::MethodCall<flutter::EncodableValue>& call,
+             std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
+                 result) {
+        const std::string& method = call.method_name();
+        if (method == "playSound") {
+          wchar_t exe_path[MAX_PATH]{};
+          GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
+          std::wstring exe_dir(exe_path);
+          const size_t pos = exe_dir.find_last_of(L"\\");
+          const std::wstring wav = exe_dir.substr(0, pos + 1) +
+              L"data\\flutter_assets\\assets\\sounds\\notify.wav";
+          PlaySoundW(wav.c_str(), nullptr,
+                     SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
+          result->Success();
+        } else if (method == "bringToFront") {
+          HWND hwnd = GetHandle();
+          if (hwnd != nullptr) {
+            if (IsIconic(hwnd)) {
+              ShowWindow(hwnd, SW_RESTORE);
+            }
+            SetForegroundWindow(hwnd);
+            // 后台进程抢前台受限时，闪一下任务栏引导用户点击
+            if (GetForegroundWindow() != hwnd) {
+              FlashWindow(hwnd, TRUE);
+            }
+          }
+          result->Success();
+        } else {
+          result->NotImplemented();
+        }
+      });
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
     this->Show();

@@ -7,8 +7,10 @@ list(APPEND FLUTTER_PLUGIN_LIST
   file_selector_windows
   flutter_webrtc
   livekit_client
+  local_notifier
   record_windows
   url_launcher_windows
+  windows_taskbar
 )
 
 list(APPEND FLUTTER_FFI_PLUGIN_LIST

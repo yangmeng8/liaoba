@@ -118,6 +118,10 @@ class ChatPushService with WidgetsBindingObserver {
     unawaited(_syncNativeChatVisibility(true));
   }
 
+  /// 当前正打开的会话 targetId（null=没有聊天页在前台）。
+  /// 桌面端通知服务用它判断「正在看的会话不提醒」。
+  String? get activeTargetId => _activeTargetId;
+
   /// 离开聊天页时清除标记（仅当离开的正是当前标记的会话）。
   void markConversationHidden({required String targetId}) {
     if (targetId.isNotEmpty && _activeTargetId != targetId) {

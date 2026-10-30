@@ -76,9 +76,12 @@ class ChatPage extends StatefulWidget {
   State<ChatPage> createState() => _ChatPageState();
 }
 
-class _ChatPageState extends State<ChatPage> {
+class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   static const int _pageSize = 20;
   static const Duration _wsRefreshDebounce = Duration(milliseconds: 300);
+
+  /// 窗口是否前台可见：后台（最小化/失焦）收到的新消息不标已读。
+  bool _lifecycleResumed = true;
 
   /// 媒体文件大小上限（16MB，与 H5 MESSAGE_MEDIA_MAX_BYTES 一致）。
   static const int _mediaMaxBytes = 16 * 1024 * 1024;
@@ -176,6 +179,9 @@ class _ChatPageState extends State<ChatPage> {
   @override
   void initState() {
     super.initState();
+    // 生命周期跟踪：窗口最小化/失焦时收到的消息不标已读（保持未读数，
+    // 任务栏角标/系统通知依赖它）；回前台再补报已读（对齐 Telegram）
+    WidgetsBinding.instance.addObserver(this);
     // 推送抑制：标记当前会话可见，聊天中收到新消息不弹横幅/通知
     ChatPushService.instance.markConversationVisible(
       targetId: widget.targetId.toString(),
@@ -403,6 +409,7 @@ class _ChatPageState extends State<ChatPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     // 离开聊天页：解除推送抑制（仅当离开的正是当前标记的会话）
     ChatPushService.instance.markConversationHidden(
       targetId: widget.targetId.toString(),
@@ -592,13 +599,25 @@ class _ChatPageState extends State<ChatPage> {
           return kb.compareTo(ka);
         });
       setState(() => _messages = merged);
-      if (nearBottom) {
+      // 窗口最小化/失焦时不标已读：保持未读数，回前台由生命周期回调补报
+      if (nearBottom && _lifecycleResumed) {
         _scrollToBottom();
         _maybeMarkRead();
       }
       if (_isPrivate) _loadPeerRead();
     } catch (_) {
       // 刷新失败静默：保持现有列表，等待下次通知或 resync
+    }
+  }
+
+  /// 窗口回前台：聊天内容重新可见，把展示中的消息补报已读（对齐 Telegram）。
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final bool resumed = state == AppLifecycleState.resumed;
+    if (resumed == _lifecycleResumed) return;
+    _lifecycleResumed = resumed;
+    if (resumed && mounted) {
+      _maybeMarkRead();
     }
   }
 

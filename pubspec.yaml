@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.1+1
+version: 1.0.2+1
 
 environment:
   sdk: ^3.11.3
@@ -56,6 +56,8 @@ dependencies:
   image_gallery_saver: ^2.0.3
   jpush_flutter: 3.4.0  # 极光推送（原生侧）；Dart 侧用 lib/services/push_service.dart 自封装（修 onPluginAttached 握手）
   url_launcher: ^6.3.2  # 版本更新：跳外部浏览器下载 APK/安装页
+  local_notifier: ^0.1.6  # Windows/macOS 系统通知（桌面端收到消息弹 Toast）
+  windows_taskbar: ^1.1.2  # Windows 任务栏角标（未读数红底白字覆盖图标）
 
 dev_dependencies:
   flutter_test:
@@ -81,6 +83,7 @@ flutter:
 
   assets:
     - assets/icon.png
+    - assets/sounds/notify.wav
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

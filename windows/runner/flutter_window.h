@@ -3,6 +3,7 @@
 
 #include <flutter/dart_project.h>
 #include <flutter/flutter_view_controller.h>
+#include <flutter/method_channel.h>
 
 #include <memory>
 
@@ -28,6 +29,10 @@ class FlutterWindow : public Win32Window {
 
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
+
+  // 桌面通知辅助通道（提示音播放 / 窗口置前），生命周期随窗口。
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
+      desktop_notify_channel_;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_
