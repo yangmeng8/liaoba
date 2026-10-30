@@ -207,22 +207,30 @@ class _FacePickerSheetState extends State<FacePickerSheet>
   }
 
   /// emoji 网格：点击插入输入框。
+  /// 固定格宽约 40px，列数随面板宽度自适应（不设上限）：
+  /// 手机约 9 列；窗口最大化/超宽面板按宽度排更多列，始终保持紧凑。
   Widget _buildEmojiGrid(ThemeColors colors) {
-    return GridView.builder(
-      padding: const EdgeInsets.all(12),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 8,
-        childAspectRatio: 1,
-      ),
-      itemCount: kImEmojiList.length,
-      itemBuilder: (context, i) {
-        final emoji = kImEmojiList[i];
-        return InkWell(
-          onTap: () => widget.onEmojiSelected(emoji),
-          borderRadius: BorderRadius.circular(6),
-          child: Center(
-            child: Text(emoji, style: const TextStyle(fontSize: 24)),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final cols = (constraints.maxWidth / 40).floor();
+        final columns = cols < 8 ? 8 : cols;
+        return GridView.builder(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: columns,
+            childAspectRatio: 1,
           ),
+          itemCount: kImEmojiList.length,
+          itemBuilder: (context, i) {
+            final emoji = kImEmojiList[i];
+            return InkWell(
+              onTap: () => widget.onEmojiSelected(emoji),
+              borderRadius: BorderRadius.circular(6),
+              child: Center(
+                child: Text(emoji, style: const TextStyle(fontSize: 24)),
+              ),
+            );
+          },
         );
       },
     );
@@ -243,39 +251,47 @@ class _FacePickerSheetState extends State<FacePickerSheet>
         ),
       );
     }
-    return GridView.builder(
-      padding: const EdgeInsets.all(12),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 4,
-        childAspectRatio: 1,
-        mainAxisSpacing: 8,
-        crossAxisSpacing: 8,
-      ),
-      // 收藏页签：+1 给首格的上传入口
-      itemCount: items.length + (deletable ? 1 : 0),
-      itemBuilder: (context, i) {
-        if (deletable && i == 0) return _buildAddTile(colors);
-        final item = items[deletable ? i - 1 : i];
-        final url = _normalizeUrl(item.url);
-        return GestureDetector(
-          onTap: () => widget.onFaceSelected(item),
-          onLongPress: deletable ? () => _confirmDelete(context, item) : null,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: Image.network(
-              url,
-              fit: BoxFit.cover,
-              errorBuilder: (_, _, _) => Container(
-                color: colors.divider,
-                alignment: Alignment.center,
-                child: Text(
-                  item.name,
-                  maxLines: 1,
-                  style: TextStyle(fontSize: 11, color: colors.muted),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // 图片表情比 emoji 大一档（目标格宽约 90px）：
+        // 列数随面板宽度自适应（不设上限），最大化时格子尺寸不变
+        final cols = (constraints.maxWidth / 90).floor();
+        final columns = cols < 4 ? 4 : cols;
+        return GridView.builder(
+          padding: const EdgeInsets.all(12),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: columns,
+            childAspectRatio: 1,
+            mainAxisSpacing: 8,
+            crossAxisSpacing: 8,
+          ),
+          // 收藏页签：+1 给首格的上传入口
+          itemCount: items.length + (deletable ? 1 : 0),
+          itemBuilder: (context, i) {
+            if (deletable && i == 0) return _buildAddTile(colors);
+            final item = items[deletable ? i - 1 : i];
+            final url = _normalizeUrl(item.url);
+            return GestureDetector(
+              onTap: () => widget.onFaceSelected(item),
+              onLongPress: deletable ? () => _confirmDelete(context, item) : null,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image.network(
+                  url,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) => Container(
+                    color: colors.divider,
+                    alignment: Alignment.center,
+                    child: Text(
+                      item.name,
+                      maxLines: 1,
+                      style: TextStyle(fontSize: 11, color: colors.muted),
+                    ),
+                  ),
                 ),
               ),
-            ),
-          ),
+            );
+          },
         );
       },
     );
