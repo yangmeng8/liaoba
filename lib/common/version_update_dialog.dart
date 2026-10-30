@@ -50,7 +50,10 @@ class VersionUpdateDialog extends StatelessWidget {
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16),
         ),
-        child: Padding(
+        // 桌面宽窗口：限制弹框最大宽度（手机窗口本身窄于上限，样式不变）
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 360),
+          child: Padding(
           padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -185,6 +188,7 @@ class VersionUpdateDialog extends StatelessWidget {
             ],
           ),
         ),
+      ),
       ),
     );
   }

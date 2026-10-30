@@ -143,8 +143,10 @@ class _GeneralSettingsPageState extends State<GeneralSettingsPage> {
     // 清空群头像成员表缓存（切换账号后九宫格不串号）
     GroupAvatar.clearCache();
     if (!context.mounted) return;
-    // 清空整个导航栈并跳转登录页，避免用户返回到已登出的页面
-    Navigator.of(context).pushAndRemoveUntil(
+    // 清空整个导航栈并跳转登录页，避免用户返回到已登出的页面。
+    // rootNavigator：本页可能嵌在设置弹框的内嵌导航里（桌面端），
+    // 退出需要清掉根栈（含弹框路由）回到登录页；手机端整页模式行为不变。
+    Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const LoginPage()),
       (route) => false,
     );
@@ -290,7 +292,10 @@ class _ClearCacheDialog extends StatelessWidget {
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16),
         ),
-        child: Padding(
+        // 桌面宽窗口：限制弹框最大宽度（手机窗口本身窄于上限，样式不变）
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 360),
+          child: Padding(
           padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -364,6 +369,7 @@ class _ClearCacheDialog extends StatelessWidget {
             ],
           ),
         ),
+      ),
       );
 }
 
@@ -375,7 +381,10 @@ class _LogoutConfirmDialog extends StatelessWidget {
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16),
         ),
-        child: Padding(
+        // 桌面宽窗口：限制弹框最大宽度（手机窗口本身窄于上限，样式不变）
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 360),
+          child: Padding(
           padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -448,6 +457,7 @@ class _LogoutConfirmDialog extends StatelessWidget {
             ],
           ),
         ),
+      ),
       );
 }
 

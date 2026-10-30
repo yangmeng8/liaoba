@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import '../../services/auth_api.dart';
 import '../../services/auth_manager.dart';
 import '../../shared/app_theme.dart';
+import '../../shared/desktop_layout.dart';
 import '../../shared/im_avatar.dart';
+import '../../shared/settings_dialog.dart';
 import 'chat_settings_page.dart';
 import 'favorites_page.dart';
 import 'my_qrcode_page.dart';
@@ -44,34 +46,30 @@ class _MePageState extends State<MePage> {
     super.dispose();
   }
 
+  /// 桌面三栏：设置类页面居中弹框展示（弹框内嵌套导航，子页面在弹框内切换，
+  /// 类似 Telegram PC 设置面板）；手机/窄窗口保持整页 push。
+  static void _openSettings(BuildContext context, Widget page) {
+    if (isDesktopLayout(context)) {
+      showSettingsDialog(context, page: page);
+    } else {
+      Navigator.of(context).push(MaterialPageRoute(builder: (_) => page));
+    }
+  }
+
   static VoidCallback? _onItemTap(String title, BuildContext context) {
     switch (title) {
       case '个人资料':
-        return () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const ProfilePage()),
-            );
+        return () => _openSettings(context, const ProfilePage());
       case '外观设置':
-        return () => Navigator.of(context).push(
-              MaterialPageRoute(
-                  builder: (_) => const AppearanceSettingsPage()),
-            );
+        return () => _openSettings(context, const AppearanceSettingsPage());
       case '聊天设置':
-        return () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const ChatSettingsPage()),
-            );
+        return () => _openSettings(context, const ChatSettingsPage());
       case '我的收藏':
-        return () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const FavoritesPage()),
-            );
+        return () => _openSettings(context, const FavoritesPage());
       case '通知设置':
-        return () => Navigator.of(context).push(
-              MaterialPageRoute(
-                  builder: (_) => const NotificationSettingsPage()),
-            );
+        return () => _openSettings(context, const NotificationSettingsPage());
       case '通用':
-        return () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const GeneralSettingsPage()),
-            );
+        return () => _openSettings(context, const GeneralSettingsPage());
     }
     return null;
   }
@@ -127,12 +125,7 @@ class _MePageState extends State<MePage> {
                   ),
                   const Spacer(),
                   InkWell(
-                    onTap: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                            builder: (_) => const MyQrcodePage()),
-                      );
-                    },
+                    onTap: () => _openSettings(context, const MyQrcodePage()),
                     borderRadius: BorderRadius.circular(20),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
