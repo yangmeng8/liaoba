@@ -148,13 +148,11 @@ class _MePageState extends State<MePage> {
         Expanded(
           child: Container(
             color: context.colors.bg,
-            child: Container(
+            child: Material(
               clipBehavior: Clip.antiAlias,
-              decoration: BoxDecoration(
-                color: context.colors.card,
-                borderRadius:
-                    const BorderRadius.vertical(top: Radius.circular(22)),
-              ),
+              color: context.colors.card,
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(22)),
               child: ListView.builder(
                 padding: const EdgeInsets.only(top: 8),
                 itemCount: items.length,
@@ -176,7 +174,7 @@ class _MePageState extends State<MePage> {
                     size: 24,
                     color: context.colors.muted,
                   ),
-                ),
+              ),
               ),
             ),
           ),

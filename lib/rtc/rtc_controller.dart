@@ -777,6 +777,11 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
   /// iOS CallKit 事件桥（AppDelegate 实现）。
   static const MethodChannel _callkitChannel = MethodChannel('im/callkit');
 
+  /// 桌面通知辅助通道（Windows runner / macOS MainFlutterWindow 实现）：
+  /// 振铃音走 im/desktop_notify（PlaySound 循环 / NSSound 循环）。
+  static const MethodChannel _desktopNotifyChannel =
+      MethodChannel('im/desktop_notify');
+
   /// 回铃音：主叫等待接听时播放（iOS 走 callkit channel / Android 走 incoming_call channel）
   void _startRingback() {
     if (Platform.isIOS) {
@@ -806,6 +811,10 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
     } else if (Platform.isAndroid) {
       unawaited(
           _incomingCallChannel.invokeMethod('startRingtone').catchError((_) {}));
+    } else if (Platform.isWindows || Platform.isMacOS) {
+      // 桌面端：来电页弹出即循环振铃（与移动端同一段铃声素材）
+      unawaited(
+          _desktopNotifyChannel.invokeMethod('startRingtone').catchError((_) {}));
     }
   }
 
@@ -816,6 +825,9 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
     } else if (Platform.isAndroid) {
       unawaited(
           _incomingCallChannel.invokeMethod('stopRingtone').catchError((_) {}));
+    } else if (Platform.isWindows || Platform.isMacOS) {
+      unawaited(
+          _desktopNotifyChannel.invokeMethod('stopRingtone').catchError((_) {}));
     }
   }
 

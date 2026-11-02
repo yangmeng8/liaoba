@@ -33,6 +33,8 @@ bool FlutterWindow::OnCreate() {
 
   // 桌面通知辅助通道：
   // - playSound：播放 assets/sounds/notify.wav（新消息提示音）
+  // - startRingtone/stopRingtone：来电振铃循环播放/停止
+  //   （assets/sounds/ringtone.wav，与移动端同一段铃声素材）
   // - bringToFront：点击系统 Toast 后把窗口还原并带到前台
   desktop_notify_channel_ =
       std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
@@ -52,6 +54,21 @@ bool FlutterWindow::OnCreate() {
               L"data\\flutter_assets\\assets\\sounds\\notify.wav";
           PlaySoundW(wav.c_str(), nullptr,
                      SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
+          result->Success();
+        } else if (method == "startRingtone") {
+          wchar_t exe_path[MAX_PATH]{};
+          GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
+          std::wstring exe_dir(exe_path);
+          const size_t pos = exe_dir.find_last_of(L"\\");
+          const std::wstring wav = exe_dir.substr(0, pos + 1) +
+              L"data\\flutter_assets\\assets\\sounds\\ringtone.wav";
+          // SND_LOOP 必须搭配 SND_ASYNC：被叫来电页期间循环振铃，
+          // stopRingtone 或下一次 PlaySound 调用会终止
+          PlaySoundW(wav.c_str(), nullptr,
+                     SND_FILENAME | SND_ASYNC | SND_LOOP | SND_NODEFAULT);
+          result->Success();
+        } else if (method == "stopRingtone") {
+          PlaySoundW(nullptr, nullptr, 0);
           result->Success();
         } else if (method == "bringToFront") {
           HWND hwnd = GetHandle();

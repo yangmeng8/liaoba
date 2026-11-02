@@ -2,6 +2,9 @@ import Cocoa
 import FlutterMacOS
 
 class MainFlutterWindow: NSWindow {
+  /// 被叫振铃音（来电页期间循环；持有引用避免被释放中断播放）
+  private var ringtoneSound: NSSound?
+
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
     let windowFrame = self.frame
@@ -17,11 +20,13 @@ class MainFlutterWindow: NSWindow {
 
     // 桌面通知辅助通道（与 Windows runner 对齐）：
     // - playSound：播放 flutter_assets 内的 assets/sounds/notify.wav
+    // - startRingtone/stopRingtone：来电振铃循环播放/停止
+    //   （assets/sounds/ringtone.wav，与移动端同一段铃声素材）
     // - bringToFront：点击系统通知后激活本应用并把主窗口还原置前
     let channel = FlutterMethodChannel(
       name: "im/desktop_notify",
       binaryMessenger: flutterViewController.engine.binaryMessenger)
-    channel.setMethodCallHandler { (call: FlutterMethodCall, result: @escaping FlutterResult) in
+    channel.setMethodCallHandler { [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) in
       switch call.method {
       case "playSound":
         let exeURL = Bundle.main.executableURL
@@ -38,6 +43,27 @@ class MainFlutterWindow: NSWindow {
         } else {
           result(FlutterError(code: "SOUND_NOT_FOUND", message: wavURL.path, details: nil))
         }
+      case "startRingtone":
+        let exeURL = Bundle.main.executableURL
+          ?? URL(fileURLWithPath: CommandLine.arguments[0])
+        let wavURL = exeURL
+          .deletingLastPathComponent()
+          .appendingPathComponent(
+            "../Frameworks/App.framework/Resources/flutter_assets/assets/sounds/ringtone.wav")
+          .standardizedFileURL
+        if let sound = NSSound(contentsOf: wavURL) {
+          sound.volume = 0.9
+          sound.loops = true
+          self?.ringtoneSound = sound
+          sound.play()
+          result(nil)
+        } else {
+          result(FlutterError(code: "SOUND_NOT_FOUND", message: wavURL.path, details: nil))
+        }
+      case "stopRingtone":
+        self?.ringtoneSound?.stop()
+        self?.ringtoneSound = nil
+        result(nil)
       case "bringToFront":
         NSApp.activate(ignoringOtherApps: true)
         let window = NSApp.mainWindow ?? NSApp.windows.first { !$0.isMiniaturized }
