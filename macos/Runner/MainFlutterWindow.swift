@@ -36,7 +36,8 @@ class MainFlutterWindow: NSWindow {
           .appendingPathComponent(
             "../Frameworks/App.framework/Resources/flutter_assets/assets/sounds/notify.wav")
           .standardizedFileURL
-        if let sound = NSSound(contentsOf: wavURL) {
+        // macOS 26 SDK：NSSound(contentsOf:) 必须显式传 byReference
+        if let sound = NSSound(contentsOf: wavURL, byReference: true) {
           sound.volume = 0.9
           sound.play()
           result(nil)
@@ -51,7 +52,7 @@ class MainFlutterWindow: NSWindow {
           .appendingPathComponent(
             "../Frameworks/App.framework/Resources/flutter_assets/assets/sounds/ringtone.wav")
           .standardizedFileURL
-        if let sound = NSSound(contentsOf: wavURL) {
+        if let sound = NSSound(contentsOf: wavURL, byReference: true) {
           sound.volume = 0.9
           sound.loops = true
           self?.ringtoneSound = sound
@@ -69,7 +70,7 @@ class MainFlutterWindow: NSWindow {
         let window = NSApp.mainWindow ?? NSApp.windows.first { !$0.isMiniaturized }
         if let window = window {
           if window.isMiniaturized {
-            window.deminiaturize()
+            window.deminiaturize(nil)
           }
           window.makeKeyAndOrderFront(nil)
         }
