@@ -45,12 +45,15 @@ class _FontSizeSettingsPageState extends State<FontSizeSettingsPage> {
                   child: Row(
                     children: [
                       Expanded(
-                        child: TextButton(
-                          onPressed: _onCancel,
-                          child: Text(
-                            '取消',
-                            style: TextStyle(
-                                fontSize: 18, color: colors.surfaceText),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton(
+                            onPressed: _onCancel,
+                            child: Text(
+                              '取消',
+                              style: TextStyle(
+                                  fontSize: 18, color: colors.surfaceText),
+                            ),
                           ),
                         ),
                       ),

@@ -272,6 +272,13 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   /// 右栏是否展示「我的」面板。
   bool _desktopShowMe = false;
 
+  /// 中栏（消息/好友列表）宽度，可通过拖拽把手调整，双击把手复位。
+  double _midPanelWidth = 300;
+
+  /// 中栏宽度可调范围（微信 PC 手感：220~480）。
+  static const double _midPanelMinWidth = 220;
+  static const double _midPanelMaxWidth = 480;
+
   @override
   void initState() {
     super.initState();
@@ -456,7 +463,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
           ),
           // 中栏：消息 / 通讯录 列表（IndexedStack 保滚动位置）
           SizedBox(
-            width: 300,
+            width: _midPanelWidth,
             child: IndexedStack(
               index: index.clamp(0, 1),
               children: [
@@ -471,8 +478,17 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
               ],
             ),
           ),
-          // 中右分隔线
-          VerticalDivider(width: 1, thickness: 1, color: colors.divider),
+          // 中右分隔：可拖拽把手（水平缩放中栏，双击复位 300）
+          _MidPanelResizer(
+            color: colors.divider,
+            activeColor: AppColors.lime,
+            width: _midPanelWidth,
+            onDrag: (dx) => setState(() {
+              _midPanelWidth =
+                  (_midPanelWidth + dx).clamp(_midPanelMinWidth, _midPanelMaxWidth);
+            }),
+            onReset: () => setState(() => _midPanelWidth = 300),
+          ),
           // 右栏：聊天 / 资料 / 我的 / 空态
           Expanded(child: _buildDesktopRightPanel(context, colors)),
         ],
@@ -569,6 +585,61 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       return const MePage();
     }
     return _DesktopEmptyPlaceholder(colors: colors);
+  }
+}
+
+/// 中右栏分隔把手：水平拖拽调整中栏宽度，双击复位。
+/// 命中区比视觉线宽（6px 视觉 / 实际整条可拖），拖拽时高亮主题色。
+class _MidPanelResizer extends StatefulWidget {
+  const _MidPanelResizer({
+    required this.color,
+    required this.activeColor,
+    required this.width,
+    required this.onDrag,
+    required this.onReset,
+  });
+
+  final Color color;
+  final Color activeColor;
+
+  /// 当前中栏宽度（决定把手是否处于极值，用于禁用态提示）。
+  final double width;
+
+  /// 拖拽增量回调（dx 为本次水平位移）。
+  final ValueChanged<double> onDrag;
+
+  /// 双击复位回调。
+  final VoidCallback onReset;
+
+  @override
+  State<_MidPanelResizer> createState() => _MidPanelResizerState();
+}
+
+class _MidPanelResizerState extends State<_MidPanelResizer> {
+  bool _dragging = false;
+  bool _hovering = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = _dragging || _hovering;
+    return MouseRegion(
+      cursor: SystemMouseCursors.resizeLeftRight,
+      onEnter: (_) => setState(() => _hovering = true),
+      onExit: (_) => setState(() => _hovering = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onHorizontalDragStart: (_) => setState(() => _dragging = true),
+        onHorizontalDragUpdate: (d) => widget.onDrag(d.delta.dx),
+        onHorizontalDragEnd: (_) => setState(() => _dragging = false),
+        onHorizontalDragCancel: () => setState(() => _dragging = false),
+        onDoubleTap: widget.onReset,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          width: 4,
+          color: active ? widget.activeColor : widget.color,
+        ),
+      ),
+    );
   }
 }
 
