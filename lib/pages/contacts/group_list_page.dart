@@ -11,7 +11,11 @@ import '../chat/chat_page.dart';
 /// 群聊列表页（对应 H5 /contact/group/list）：
 /// 全量我的群（过滤已退群）+ 本地群名搜索；点击直接进聊天室（不经群设置页）。
 class GroupListPage extends StatefulWidget {
-  const GroupListPage({super.key});
+  /// 桌面弹框模式：点击群聊回调（宿主关闭弹框并在右栏打开群聊）；
+  /// null 时走移动端整页 push 聊天室。
+  final ValueChanged<ImGroup>? onOpenGroupChat;
+
+  const GroupListPage({super.key, this.onOpenGroupChat});
 
   @override
   State<GroupListPage> createState() => _GroupListPageState();
@@ -94,7 +98,9 @@ class _GroupListPageState extends State<GroupListPage> {
                   IconButton(
                     icon: const Icon(Icons.arrow_back_ios_new, size: 22),
                     color: colors.surfaceText,
-                    onPressed: () => Navigator.of(context).maybePop(),
+                    // pop（不用 maybePop）：桌面弹框内本页是嵌套导航的第一页，
+                    // maybePop 判定为 bubble 不会弹，导致返回键无法回收弹框
+                    onPressed: () => Navigator.of(context).pop(),
                   ),
                   Expanded(
                     child: Text(
@@ -162,16 +168,25 @@ class _GroupListPageState extends State<GroupListPage> {
           final g = list[i];
           return InkWell(
             // 点击直接进聊天室（对齐 H5：不经群设置页）
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => ChatPage(
-                  type: ImConversationType.group,
-                  targetId: g.id,
-                  title: g.name,
-                  avatar: g.avatar,
+            onTap: () {
+              final open = widget.onOpenGroupChat;
+              if (open != null) {
+                // 桌面弹框模式：关闭弹框（第一页 pop 触发观察者关闭），右栏打开群聊
+                Navigator.of(context).pop();
+                open(g);
+                return;
+              }
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => ChatPage(
+                    type: ImConversationType.group,
+                    targetId: g.id,
+                    title: g.name,
+                    avatar: g.avatar,
+                  ),
                 ),
-              ),
-            ),
+              );
+            },
             child: Container(
               color: colors.card,
               padding:

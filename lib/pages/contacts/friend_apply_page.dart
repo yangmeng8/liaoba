@@ -245,7 +245,9 @@ class _FriendApplyPageState extends State<FriendApplyPage> {
               IconButton(
                 icon: const Icon(Icons.arrow_back_ios_new, size: 22),
                 color: colors.surfaceText,
-                onPressed: () => Navigator.of(context).maybePop(),
+                // pop（不用 maybePop）：桌面弹框内本页是嵌套导航的第一页，
+                // maybePop 判定为 bubble 不会弹，导致返回键无法回收弹框
+                onPressed: () => Navigator.of(context).pop(),
               ),
               Expanded(
                 child: Text(

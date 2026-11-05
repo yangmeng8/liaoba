@@ -790,6 +790,10 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
     } else if (Platform.isAndroid) {
       unawaited(
           _incomingCallChannel.invokeMethod('startRingback').catchError((_) {}));
+    } else if (Platform.isWindows || Platform.isMacOS) {
+      // 桌面端：主叫等待接听期间循环回铃（与移动端同一段素材）
+      unawaited(
+          _desktopNotifyChannel.invokeMethod('startRingback').catchError((_) {}));
     }
   }
 
@@ -800,6 +804,9 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
     } else if (Platform.isAndroid) {
       unawaited(
           _incomingCallChannel.invokeMethod('stopRingback').catchError((_) {}));
+    } else if (Platform.isWindows || Platform.isMacOS) {
+      unawaited(
+          _desktopNotifyChannel.invokeMethod('stopRingback').catchError((_) {}));
     }
   }
 

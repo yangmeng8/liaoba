@@ -10,7 +10,11 @@ import '../../pages/chat/chat_page.dart';
 
 /// 创建群聊页：群名 + 好友多选（字母分桶）→ create 接口 → 直接进聊天室。
 class CreateGroupPage extends StatefulWidget {
-  const CreateGroupPage({super.key});
+  /// 桌面弹框模式：创建成功后回调（宿主关闭弹框并在右栏打开群聊）；
+  /// null 时走移动端整页跳转聊天室的原有逻辑。
+  final ValueChanged<ImGroup>? onCreated;
+
+  const CreateGroupPage({super.key, this.onCreated});
 
   @override
   State<CreateGroupPage> createState() => _CreateGroupPageState();
@@ -79,6 +83,14 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
         ..showSnackBar(const SnackBar(content: Text('创建成功')));
+      final onCreated = widget.onCreated;
+      if (onCreated != null) {
+        // 桌面弹框模式：关闭弹框（弹框内最后一页 pop 触发观察者关闭），
+        // 由宿主在右栏打开群聊
+        Navigator.of(context).pop();
+        onCreated(group);
+        return;
+      }
       // 清栈回聊天室（替换当前页，返回时回通讯录）
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(
@@ -173,7 +185,9 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
               IconButton(
                 icon: const Icon(Icons.arrow_back_ios_new, size: 22),
                 color: colors.surfaceText,
-                onPressed: () => Navigator.of(context).maybePop(),
+                // pop（不用 maybePop）：桌面弹框内本页是嵌套导航的第一页，
+                // maybePop 判定为 bubble 不会弹，导致返回键无法回收弹框
+                onPressed: () => Navigator.of(context).pop(),
               ),
               Expanded(
                 child: Text(

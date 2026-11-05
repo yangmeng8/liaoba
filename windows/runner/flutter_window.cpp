@@ -61,13 +61,27 @@ bool FlutterWindow::OnCreate() {
           std::wstring exe_dir(exe_path);
           const size_t pos = exe_dir.find_last_of(L"\\");
           const std::wstring wav = exe_dir.substr(0, pos + 1) +
-              L"data\\flutter_assets\\assets\\sounds\\ringtone.wav";
+              L"data\\flutter_assets\\assets\\sounds\\ringtone_reflection.wav";
           // SND_LOOP 必须搭配 SND_ASYNC：被叫来电页期间循环振铃，
           // stopRingtone 或下一次 PlaySound 调用会终止
           PlaySoundW(wav.c_str(), nullptr,
                      SND_FILENAME | SND_ASYNC | SND_LOOP | SND_NODEFAULT);
           result->Success();
         } else if (method == "stopRingtone") {
+          PlaySoundW(nullptr, nullptr, 0);
+          result->Success();
+        } else if (method == "startRingback") {
+          wchar_t exe_path[MAX_PATH]{};
+          GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
+          std::wstring exe_dir(exe_path);
+          const size_t pos = exe_dir.find_last_of(L"\\");
+          const std::wstring wav = exe_dir.substr(0, pos + 1) +
+              L"data\\flutter_assets\\assets\\sounds\\ringback.wav";
+          // 主叫等待接听期间循环回铃（与移动端同一段素材）
+          PlaySoundW(wav.c_str(), nullptr,
+                     SND_FILENAME | SND_ASYNC | SND_LOOP | SND_NODEFAULT);
+          result->Success();
+        } else if (method == "stopRingback") {
           PlaySoundW(nullptr, nullptr, 0);
           result->Success();
         } else if (method == "bringToFront") {

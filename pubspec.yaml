@@ -84,7 +84,8 @@ flutter:
   assets:
     - assets/icon.png
     - assets/sounds/notify.wav
-    - assets/sounds/ringtone.wav
+    - assets/sounds/ringtone_reflection.wav
+    - assets/sounds/ringback.wav
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

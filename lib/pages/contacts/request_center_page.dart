@@ -5,7 +5,9 @@ import '../../services/auth_manager.dart';
 import '../../services/im_api.dart';
 import '../../shared/app_colors.dart';
 import '../../shared/app_theme.dart';
+import '../../shared/desktop_layout.dart';
 import '../../shared/im_avatar.dart';
+import '../../shared/settings_dialog.dart';
 import '../../shared/widgets.dart';
 import 'friend_apply_page.dart';
 import 'user_profile_page.dart';
@@ -27,6 +29,17 @@ class _RequestCenterPageState extends State<RequestCenterPage>
   void dispose() {
     _tabCtrl.dispose();
     super.dispose();
+  }
+
+  /// 右上角「+」：添加好友（桌面端居中弹框小窗口，移动端整页 push）。
+  void _openFriendApply() {
+    if (isDesktopLayout(context)) {
+      showSettingsDialog(context, page: const FriendApplyPage());
+    } else {
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const FriendApplyPage()),
+      );
+    }
   }
 
   @override
@@ -65,7 +78,9 @@ class _RequestCenterPageState extends State<RequestCenterPage>
                   IconButton(
                     icon: const Icon(Icons.arrow_back_ios_new, size: 22),
                     color: colors.surfaceText,
-                    onPressed: () => Navigator.of(context).maybePop(),
+                    // pop（不用 maybePop）：桌面弹框内本页是嵌套导航的第一页，
+                    // maybePop 判定为 bubble 不会弹，导致返回键无法回收弹框
+                    onPressed: () => Navigator.of(context).pop(),
                   ),
                   Expanded(
                     child: Text(
@@ -81,10 +96,7 @@ class _RequestCenterPageState extends State<RequestCenterPage>
                     icon: const Icon(Icons.person_add_alt_1_outlined,
                         size: 24),
                     color: colors.surfaceText,
-                    onPressed: () => Navigator.of(context).push(
-                      MaterialPageRoute(
-                          builder: (_) => const FriendApplyPage()),
-                    ),
+                    onPressed: () => _openFriendApply(),
                   ),
                 ],
               ),

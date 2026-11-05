@@ -10,6 +10,7 @@ import '../../shared/app_theme.dart';
 import '../../shared/desktop_layout.dart';
 import '../../shared/group_avatar.dart';
 import '../../shared/im_avatar.dart';
+import '../../shared/settings_dialog.dart';
 import '../../shared/widgets.dart';
 import '../../stores/conversation_store.dart';
 import '../../stores/presence_store.dart';
@@ -24,7 +25,15 @@ class MessagesPage extends StatefulWidget {
   /// null 时走移动端整页 push。
   final ValueChanged<ImConversation>? onOpenConversation;
 
-  const MessagesPage({super.key, this.onOpenConversation});
+  /// 桌面三栏布局：打开群聊回调（右栏打开群聊；新建群聊成功也走这里）。
+  /// null 时走移动端整页跳转聊天室。
+  final ValueChanged<ImGroup>? onOpenGroupChat;
+
+  const MessagesPage({
+    super.key,
+    this.onOpenConversation,
+    this.onOpenGroupChat,
+  });
 
   @override
   State<MessagesPage> createState() => _MessagesPageState();
@@ -85,16 +94,31 @@ class _MessagesPageState extends State<MessagesPage> {
         HeaderMenuItem(icon: Icons.groups_outlined, label: '创建群聊'),
         HeaderMenuItem(icon: Icons.qr_code_scanner, label: '扫一扫'),
       ],
-      onSelect: (i) => Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => switch (i) {
-            0 => const FriendApplyPage(),
-            1 => const CreateGroupPage(),
-            _ => const QrScanPage(),
-          },
-        ),
-      ),
+      onSelect: (i) {
+        if (i == 2) {
+          // 扫一扫仍整页打开（桌面端为占位页）
+          Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const QrScanPage()),
+          );
+          return;
+        }
+        _openPanelPage(
+          i == 0
+              ? const FriendApplyPage()
+              : CreateGroupPage(onCreated: widget.onOpenGroupChat),
+        );
+      },
     );
+  }
+
+  /// 添加好友 / 创建群聊：桌面端走居中弹框小窗口（与「我的 → 个人资料」同款），
+  /// 移动端保持整页 push。
+  void _openPanelPage(Widget page) {
+    if (isDesktopLayout(context)) {
+      showSettingsDialog(context, page: page);
+    } else {
+      Navigator.of(context).push(MaterialPageRoute(builder: (_) => page));
+    }
   }
 
   /// 按当前 chip + 搜索关键词过滤会话列表。

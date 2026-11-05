@@ -462,8 +462,14 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             child: IndexedStack(
               index: index.clamp(0, 1),
               children: [
-                MessagesPage(onOpenConversation: _openDesktopConversation),
-                ContactsPage(onOpenFriend: _openDesktopFriend),
+                MessagesPage(
+                  onOpenConversation: _openDesktopConversation,
+                  onOpenGroupChat: _openDesktopGroupChat,
+                ),
+                ContactsPage(
+                  onOpenFriend: _openDesktopFriend,
+                  onOpenGroupChat: _openDesktopGroupChat,
+                ),
               ],
             ),
           ),
@@ -493,6 +499,25 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       _desktopConv = null;
       _desktopShowMe = false;
       index = 1;
+    });
+  }
+
+  /// 桌面右栏打开新建群聊（来自「创建群聊」弹框创建成功回调）。
+  void _openDesktopGroupChat(ImGroup group) {
+    setState(() {
+      _desktopConv = ImConversation(
+        type: ImConversationType.group,
+        targetId: group.id,
+        title: group.shownName,
+        avatar: group.avatar,
+        lastMessageText: '',
+        lastMessageTime: null,
+        unreadCount: 0,
+        pinned: false,
+        silent: false,
+      );
+      _desktopProfileUserId = null;
+      _desktopShowMe = false;
     });
   }
 

@@ -142,13 +142,13 @@ class MainActivity : FlutterActivity() {
         ringbackPlayer = null
     }
 
-    /// 被叫振铃音（来电页弹出时循环，复用来电铃声 push_notification_v3）
+    /// 被叫振铃音（来电页弹出时循环，倒影铃声 call_ringtone，与 iOS 默认来电铃声同款）
     private var ringtonePlayer: MediaPlayer? = null
 
     private fun startRingtone() {
         if (ringtonePlayer?.isPlaying == true) return
         try {
-            val player = MediaPlayer.create(this, R.raw.push_notification_v3)
+            val player = MediaPlayer.create(this, R.raw.call_ringtone)
             player.isLooping = true
             player.start()
             ringtonePlayer = player
@@ -173,12 +173,13 @@ class MainActivity : FlutterActivity() {
     /// 来电 fullScreenIntent 全屏通知：
     /// - 锁屏/熄屏：系统直接点亮屏幕并全屏启动 MainActivity（微信式来电界面）
     /// - 亮屏后台：显示 heads-up 横幅，点击全屏进入
-    /// - 通知渠道绑定 30s 嘟嘟声铃声（res/raw/push_notification_v3）
+    /// - 通知渠道绑定倒影铃声（res/raw/call_ringtone，与 iOS 默认来电铃声同款；
+    ///   渠道声音在渠道创建时锁定，老安装需卸载重装才会换声）
     /// - fullScreenPendingIntent 复用 push_open 冷启动消费链路
     ///   （n_extras JSON → buildPushOpenPayload → Dart 识别 call_invite → 弹来电页）
     private fun showIncomingCallNotification(title: String?, content: String?, extrasJson: String?) {
         try {
-            val soundUri = Uri.parse("android.resource://$packageName/raw/push_notification_v3")
+            val soundUri = Uri.parse("android.resource://$packageName/raw/call_ringtone")
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 val channel = NotificationChannel(
                     CALL_CHANNEL_ID,

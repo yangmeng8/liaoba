@@ -4,6 +4,8 @@ import FlutterMacOS
 class MainFlutterWindow: NSWindow {
   /// 被叫振铃音（来电页期间循环；持有引用避免被释放中断播放）
   private var ringtoneSound: NSSound?
+  /// 主叫回铃音（等待对方接听期间循环）
+  private var ringbackSound: NSSound?
 
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
@@ -50,7 +52,7 @@ class MainFlutterWindow: NSWindow {
         let wavURL = exeURL
           .deletingLastPathComponent()
           .appendingPathComponent(
-            "../Frameworks/App.framework/Resources/flutter_assets/assets/sounds/ringtone.wav")
+            "../Frameworks/App.framework/Resources/flutter_assets/assets/sounds/ringtone_reflection.wav")
           .standardizedFileURL
         if let sound = NSSound(contentsOf: wavURL, byReference: true) {
           sound.volume = 0.9
@@ -64,6 +66,27 @@ class MainFlutterWindow: NSWindow {
       case "stopRingtone":
         self?.ringtoneSound?.stop()
         self?.ringtoneSound = nil
+        result(nil)
+      case "startRingback":
+        let exeURL = Bundle.main.executableURL
+          ?? URL(fileURLWithPath: CommandLine.arguments[0])
+        let wavURL = exeURL
+          .deletingLastPathComponent()
+          .appendingPathComponent(
+            "../Frameworks/App.framework/Resources/flutter_assets/assets/sounds/ringback.wav")
+          .standardizedFileURL
+        if let sound = NSSound(contentsOf: wavURL, byReference: true) {
+          sound.volume = 0.9
+          sound.loops = true
+          self?.ringbackSound = sound
+          sound.play()
+          result(nil)
+        } else {
+          result(FlutterError(code: "SOUND_NOT_FOUND", message: wavURL.path, details: nil))
+        }
+      case "stopRingback":
+        self?.ringbackSound?.stop()
+        self?.ringbackSound = nil
         result(nil)
       case "bringToFront":
         NSApp.activate(ignoringOtherApps: true)

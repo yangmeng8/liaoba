@@ -9,6 +9,7 @@ import '../../shared/app_colors.dart';
 import '../../shared/app_theme.dart';
 import '../../shared/desktop_layout.dart';
 import '../../shared/im_avatar.dart';
+import '../../shared/settings_dialog.dart';
 import '../../shared/widgets.dart';
 import '../../stores/presence_store.dart';
 import '../../stores/request_badge_store.dart';
@@ -28,7 +29,11 @@ class ContactsPage extends StatefulWidget {
   /// null 时走移动端整页 push。
   final ValueChanged<int>? onOpenFriend;
 
-  const ContactsPage({super.key, this.onOpenFriend});
+  /// 桌面三栏布局：打开群聊回调（右栏打开群聊；新建群聊成功也走这里）。
+  /// null 时走移动端整页跳转聊天室。
+  final ValueChanged<ImGroup>? onOpenGroupChat;
+
+  const ContactsPage({super.key, this.onOpenFriend, this.onOpenGroupChat});
 
   @override
   State<ContactsPage> createState() => _ContactsPageState();
@@ -115,16 +120,32 @@ class _ContactsPageState extends State<ContactsPage> {
         HeaderMenuItem(icon: Icons.group_add_outlined, label: '创建群聊'),
         HeaderMenuItem(icon: Icons.qr_code_scanner, label: '扫一扫'),
       ],
-      onSelect: (i) => Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => switch (i) {
-            0 => const FriendApplyPage(),
-            1 => const CreateGroupPage(),
-            _ => const QrScanPage(),
-          },
-        ),
-      ),
+      onSelect: (i) {
+        if (i == 2) {
+          // 扫一扫仍整页打开（桌面端为占位页）
+          Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const QrScanPage()),
+          );
+          return;
+        }
+        _openPanelPage(
+          i == 0
+              ? const FriendApplyPage()
+              : CreateGroupPage(onCreated: widget.onOpenGroupChat),
+        );
+      },
     );
+  }
+
+  /// 页面型入口（添加好友/创建群聊/新的朋友/群聊）：桌面端走居中弹框小窗口
+  /// （与「我的 → 个人资料」同款），移动端保持整页 push。
+  Future<void> _openPanelPage(Widget page) async {
+    if (isDesktopLayout(context)) {
+      await showSettingsDialog(context, page: page);
+    } else {
+      await Navigator.of(context)
+          .push(MaterialPageRoute<void>(builder: (_) => page));
+    }
   }
 
   /// 索引条点击 → 滚动到对应分组头。
@@ -341,10 +362,7 @@ class _ContactsPageState extends State<ContactsPage> {
                     title: '新的朋友',
                     badge: RequestBadgeStore.instance.pending,
                     onTap: () async {
-                      await Navigator.of(context).push(
-                        MaterialPageRoute(
-                            builder: (_) => const RequestCenterPage()),
-                      );
+                      await _openPanelPage(const RequestCenterPage());
                       // 请求中心里同意/拒绝后返回，刷新待办角标
                       RequestBadgeStore.instance.refresh();
                     },
@@ -353,8 +371,10 @@ class _ContactsPageState extends State<ContactsPage> {
                   _EntryTile(
                     icon: Icons.groups_outlined,
                     title: '群聊',
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const GroupListPage()),
+                    onTap: () => _openPanelPage(
+                      GroupListPage(
+                        onOpenGroupChat: widget.onOpenGroupChat,
+                      ),
                     ),
                   ),
                 ],
