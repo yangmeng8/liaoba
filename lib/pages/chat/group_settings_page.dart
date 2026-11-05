@@ -17,6 +17,7 @@ import '../../shared/app_theme.dart';
 import '../../shared/burn_picker.dart';
 import '../../shared/im_avatar.dart';
 import '../../shared/json_utils.dart';
+import '../../shared/settings_dialog.dart';
 import '../../stores/conversation_store.dart';
 import '../contacts/user_profile_page.dart';
 import 'chat_search_page.dart';
@@ -336,14 +337,14 @@ class _GroupSettingsPageState extends State<GroupSettingsPage> {
   // ==================== 成员操作 ====================
 
   /// 点击成员 → 用户资料页（群聊入口带来源上下文）。
+  /// 桌面端以居中弹框小窗口打开，移动端整页 push。
   void _openMemberProfile(ImGroupMember m) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => UserProfilePage(
-          userId: m.userId,
-          addSource: 2,
-          sourceExtra: _group?.name ?? '',
-        ),
+    showPanelPage(
+      context,
+      UserProfilePage(
+        userId: m.userId,
+        addSource: 2,
+        sourceExtra: _group?.name ?? '',
       ),
     );
   }

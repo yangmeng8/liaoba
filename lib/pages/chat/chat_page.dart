@@ -35,9 +35,11 @@ import '../../services/im_websocket.dart';
 import '../../shared/app_colors.dart';
 import '../../shared/app_theme.dart';
 import '../../shared/chat_background.dart';
+import '../../shared/desktop_layout.dart';
 import '../../shared/image_edit_utils.dart';
 import '../../shared/im_avatar.dart';
 import '../../shared/json_utils.dart';
+import '../../shared/settings_dialog.dart';
 import '../../stores/conversation_store.dart';
 import 'face_picker_sheet.dart';
 import 'group_settings_page.dart';
@@ -63,6 +65,10 @@ class ChatPage extends StatefulWidget {
   /// （无外层路由可 pop），其余行为不变。
   final bool embedded;
 
+  /// 桌面三栏布局：用户资料弹框内「发消息」回调（关闭弹框并切右栏私聊）。
+  /// null 时资料页「发消息」走默认整页 push。
+  final void Function(int userId, String name, String avatar)? onOpenPrivateChat;
+
   const ChatPage({
     super.key,
     required this.type,
@@ -70,6 +76,7 @@ class ChatPage extends StatefulWidget {
     required this.title,
     this.avatar = '',
     this.embedded = false,
+    this.onOpenPrivateChat,
   });
 
   @override
@@ -361,13 +368,35 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   /// 群聊入口带 source=2+群名（好友申请来源上下文），私聊入口 source=1。
   void _openUserProfile(int userId) {
     if (userId <= 0) return; // @所有人 / 频道广播 / 系统消息
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => UserProfilePage(
-          userId: userId,
-          addSource: _isGroup ? 2 : 1,
-          sourceExtra: _isGroup ? widget.title : '',
-        ),
+    _openProfilePage(
+      userId,
+      addSource: _isGroup ? 2 : 1,
+      sourceExtra: _isGroup ? widget.title : '',
+    );
+  }
+
+  /// 用户资料打开方式：桌面端居中弹框小窗口，移动端整页 push。
+  /// 桌面弹框内点「发消息」→ 关闭弹框并切右栏私聊。
+  void _openProfilePage(
+    int userId, {
+    int addSource = 1,
+    String sourceExtra = '',
+  }) {
+    final openPrivateChat = widget.onOpenPrivateChat;
+    final useDialog = isDesktopLayout(context);
+    showPanelPage(
+      context,
+      UserProfilePage(
+        userId: userId,
+        addSource: addSource,
+        sourceExtra: sourceExtra,
+        onSendMessage: (useDialog && openPrivateChat != null)
+            ? (id, name, avatar) {
+                // 弹框挂在根 Navigator 上，pop 即关闭弹框
+                Navigator.of(context).pop();
+                openPrivateChat(id, name, avatar);
+              }
+            : null,
       ),
     );
   }
@@ -376,16 +405,18 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   /// 私聊 → 好友资料页（三态复用页）；群聊 → 群设置页；频道无入口。
   /// 返回后同步：群名/备注可能已改（标题刷新 + 成员重拉）、本地记录可能已清空。
   Future<void> _openSettings() async {
-    Widget? page;
     if (_isPrivate) {
-      page = UserProfilePage(userId: widget.targetId, addSource: 1);
+      _openProfilePage(widget.targetId);
     } else if (_isGroup) {
-      page = GroupSettingsPage(groupId: widget.targetId);
+      // 群设置页保持整页打开（内容较多）
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => GroupSettingsPage(groupId: widget.targetId),
+        ),
+      );
+    } else {
+      return;
     }
-    if (page == null) return;
-    await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => page!),
-    );
     if (!mounted) return;
     if (_isGroup) {
       _loadGroupMembers(); // 角色/昵称可能变化（被降权、改组内昵称等）
@@ -2692,12 +2723,7 @@ class _MessageItem extends StatelessWidget {
                     builder: (_) => GroupSettingsPage(groupId: card.targetId),
                   ),
                 )
-            : () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) =>
-                        UserProfilePage(userId: card.targetId, addSource: 1),
-                  ),
-                ),
+            : () => onOpenProfile(card.targetId),
         child: _CardBubbleBody(payload: card),
       );
     } else if (message.type == ChatMsgType.material &&

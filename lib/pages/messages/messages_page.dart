@@ -102,23 +102,14 @@ class _MessagesPageState extends State<MessagesPage> {
           );
           return;
         }
-        _openPanelPage(
+        showPanelPage(
+          context,
           i == 0
               ? const FriendApplyPage()
               : CreateGroupPage(onCreated: widget.onOpenGroupChat),
         );
       },
     );
-  }
-
-  /// 添加好友 / 创建群聊：桌面端走居中弹框小窗口（与「我的 → 个人资料」同款），
-  /// 移动端保持整页 push。
-  void _openPanelPage(Widget page) {
-    if (isDesktopLayout(context)) {
-      showSettingsDialog(context, page: page);
-    } else {
-      Navigator.of(context).push(MaterialPageRoute(builder: (_) => page));
-    }
   }
 
   /// 按当前 chip + 搜索关键词过滤会话列表。

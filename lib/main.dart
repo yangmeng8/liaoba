@@ -29,6 +29,7 @@ import 'shared/desktop_layout.dart';
 import 'shared/diag_log.dart';
 import 'shared/font_scale_manager.dart';
 import 'shared/im_avatar.dart';
+import 'shared/settings_dialog.dart';
 import 'shared/theme_manager.dart';
 
 /// 极光推送 AppKey。 555
@@ -263,13 +264,10 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   final pages = const [MessagesPage(), ContactsPage(), MePage()];
 
   // ==================== 桌面三栏（微信 PC 风格）右栏状态 ====================
-  // 右栏互斥展示：聊天会话 / 好友资料 / 我的面板；全空显示占位空态。
+  // 右栏互斥展示：聊天会话 / 我的面板；全空显示占位空态。
 
   /// 右栏当前展示的聊天会话。
   ImConversation? _desktopConv;
-
-  /// 右栏当前展示的好友资料页目标 userId。
-  int? _desktopProfileUserId;
 
   /// 右栏是否展示「我的」面板。
   bool _desktopShowMe = false;
@@ -486,19 +484,43 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   void _openDesktopConversation(ImConversation conv) {
     setState(() {
       _desktopConv = conv;
-      _desktopProfileUserId = null;
       _desktopShowMe = false;
       index = 0;
     });
   }
 
-  /// 桌面右栏打开好友资料（来自中栏通讯录点击）。
+  /// 桌面右栏打开好友资料（来自中栏通讯录点击）：
+  /// 以居中弹框小窗口展示，不改动右栏当前内容；
+  /// 点「发消息」关闭弹框并在右栏打开私聊。
   void _openDesktopFriend(int userId) {
+    showSettingsDialog(
+      context,
+      page: UserProfilePage(
+        userId: userId,
+        onSendMessage: (id, name, avatar) {
+          // 弹框挂在根 Navigator 上，pop 即关闭弹框
+          Navigator.of(context).pop();
+          _openDesktopPrivateChat(id, name, avatar);
+        },
+      ),
+    );
+  }
+
+  /// 桌面右栏打开私聊（资料弹框「发消息」回调）。
+  void _openDesktopPrivateChat(int userId, String name, String avatar) {
     setState(() {
-      _desktopProfileUserId = userId;
-      _desktopConv = null;
+      _desktopConv = ImConversation(
+        type: ImConversationType.private,
+        targetId: userId,
+        title: name,
+        avatar: avatar,
+        lastMessageText: '',
+        lastMessageTime: null,
+        unreadCount: 0,
+        pinned: false,
+        silent: false,
+      );
       _desktopShowMe = false;
-      index = 1;
     });
   }
 
@@ -516,7 +538,6 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
         pinned: false,
         silent: false,
       );
-      _desktopProfileUserId = null;
       _desktopShowMe = false;
     });
   }
@@ -526,11 +547,10 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     setState(() {
       _desktopShowMe = true;
       _desktopConv = null;
-      _desktopProfileUserId = null;
     });
   }
 
-  /// 桌面右栏内容：聊天 / 好友资料 / 我的 / 空态（互斥）。
+  /// 桌面右栏内容：聊天 / 我的 / 空态（互斥；用户资料以弹框小窗口打开）。
   Widget _buildDesktopRightPanel(BuildContext context, ThemeColors colors) {
     final conv = _desktopConv;
     if (conv != null) {
@@ -541,30 +561,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
         title: conv.title,
         avatar: conv.avatar,
         embedded: true,
-      );
-    }
-    final profileUserId = _desktopProfileUserId;
-    if (profileUserId != null) {
-      return UserProfilePage(
-        key: ValueKey('desktop_profile_$profileUserId'),
-        userId: profileUserId,
-        embedded: true,
-        onSendMessage: (userId, name, avatar) {
-          setState(() {
-            _desktopProfileUserId = null;
-            _desktopConv = ImConversation(
-              type: ImConversationType.private,
-              targetId: userId,
-              title: name,
-              avatar: avatar,
-              lastMessageText: '',
-              lastMessageTime: null,
-              unreadCount: 0,
-              pinned: false,
-              silent: false,
-            );
-          });
-        },
+        onOpenPrivateChat: _openDesktopPrivateChat,
       );
     }
     if (_desktopShowMe) {

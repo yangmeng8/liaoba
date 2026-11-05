@@ -1,5 +1,19 @@
 import 'package:flutter/material.dart';
 
+import 'desktop_layout.dart';
+
+/// 桌面端页面型入口统一打开方式：
+/// 宽屏 → 居中弹框小窗口（与「我的 → 个人资料」同款）；
+/// 窄屏 → 整页 push（手机端零回归）。
+Future<void> showPanelPage(BuildContext context, Widget page) async {
+  if (isDesktopLayout(context)) {
+    await showSettingsDialog(context, page: page);
+  } else {
+    await Navigator.of(context)
+        .push(MaterialPageRoute<void>(builder: (_) => page));
+  }
+}
+
 /// 桌面端设置类页面居中弹框（微信/Telegram PC 风格）：
 /// - 弹框内嵌套独立 Navigator，页面内部所有 push/pop 都发生在弹框内，
 ///   子页面（账户安全/改密码/意见反馈/关于等）在弹框内切换，不覆盖整个 App；
