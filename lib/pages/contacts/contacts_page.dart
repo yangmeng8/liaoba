@@ -16,6 +16,7 @@ import '../../stores/request_badge_store.dart';
 import 'create_group_page.dart';
 import 'friend_apply_page.dart';
 import 'friend_buckets.dart';
+import 'blacklist_page.dart';
 import 'group_list_page.dart';
 import 'qr_scan_page.dart';
 import 'request_center_page.dart';
@@ -367,6 +368,12 @@ class _ContactsPageState extends State<ContactsPage> {
                         onOpenGroupChat: widget.onOpenGroupChat,
                       ),
                     ),
+                  ),
+                  Divider(height: 1, indent: 78, color: colors.divider),
+                  _EntryTile(
+                    icon: Icons.block_outlined,
+                    title: '黑名单',
+                    onTap: () => showPanelPage(context, const BlacklistPage()),
                   ),
                 ],
               ),
