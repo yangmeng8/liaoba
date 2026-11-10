@@ -8,6 +8,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:image/image.dart' as img;
 import 'package:image_gallery_saver/image_gallery_saver.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:just_audio/just_audio.dart';
@@ -33,6 +34,7 @@ import '../../services/chat_history_cleaner.dart';
 import '../../services/chat_push_service.dart';
 import '../../services/im_api.dart';
 import '../../services/im_websocket.dart';
+import '../../services/desktop_notify_service.dart';
 import '../../shared/app_colors.dart';
 import '../../shared/app_theme.dart';
 import '../../shared/chat_background.dart';
@@ -68,7 +70,8 @@ class ChatPage extends StatefulWidget {
 
   /// 桌面三栏布局：用户资料弹框内「发消息」回调（关闭弹框并切右栏私聊）。
   /// null 时资料页「发消息」走默认整页 push。
-  final void Function(int userId, String name, String avatar)? onOpenPrivateChat;
+  final void Function(int userId, String name, String avatar)?
+  onOpenPrivateChat;
 
   const ChatPage({
     super.key,
@@ -100,10 +103,43 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
 
   /// 危险文件扩展名黑名单（对齐 H5 DANGEROUS_FILE_EXTENSIONS）。
   static const Set<String> _dangerousExtensions = {
-    'exe', 'bat', 'cmd', 'com', 'cpl', 'dll', 'inf', 'ins', 'inx', 'isu',
-    'job', 'js', 'jse', 'jar', 'lnk', 'msi', 'msp', 'mst', 'paf', 'pif',
-    'ps1', 'reg', 'rgs', 'scr', 'sct', 'shb', 'shs', 'sh', 'vb', 'vbe',
-    'vbs', 'ws', 'wsc', 'wsf', 'wsh', 'html', 'htm',
+    'exe',
+    'bat',
+    'cmd',
+    'com',
+    'cpl',
+    'dll',
+    'inf',
+    'ins',
+    'inx',
+    'isu',
+    'job',
+    'js',
+    'jse',
+    'jar',
+    'lnk',
+    'msi',
+    'msp',
+    'mst',
+    'paf',
+    'pif',
+    'ps1',
+    'reg',
+    'rgs',
+    'scr',
+    'sct',
+    'shb',
+    'shs',
+    'sh',
+    'vb',
+    'vbe',
+    'vbs',
+    'ws',
+    'wsc',
+    'wsf',
+    'wsh',
+    'html',
+    'htm',
   };
 
   /// index 0 = 最新（配合 reverse ListView：index 0 渲染在底部）。
@@ -233,15 +269,19 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       // 群消息批量删除（2206）：按 messageIds 精确移除本地消息，
       // 随后防抖刷新补齐剩余变化
       if (n.contentType == ImSystemMessageType.groupMsgDelete) {
-        final ids = (n.payload['messageIds'] as List?)
+        final ids =
+            (n.payload['messageIds'] as List?)
                 ?.map((e) => asInt(e))
                 .where((id) => id > 0)
                 .toSet() ??
             const <int>{};
         final had = _messages.any((m) => m.id != null && ids.contains(m.id));
         if (had && mounted) {
-          setState(() => _messages
-              .removeWhere((m) => m.id != null && ids.contains(m.id)));
+          setState(
+            () => _messages.removeWhere(
+              (m) => m.id != null && ids.contains(m.id),
+            ),
+          );
         }
       }
       // 防抖合并：短时间多条通知只刷新一次
@@ -294,9 +334,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   /// 拉取群成员表建索引（降级链的「群成员表」层，优先于好友表）。
   Future<void> _loadGroupMembers() async {
     try {
-      final members = await ImApi.getGroupMemberList(
-        groupId: widget.targetId,
-      );
+      final members = await ImApi.getGroupMemberList(groupId: widget.targetId);
       if (!mounted) return;
       setState(() {
         for (final m in members) {
@@ -410,10 +448,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       _openProfilePage(widget.targetId);
     } else if (_isGroup) {
       // 群设置：桌面端居中弹框小窗口，移动端整页
-      await showPanelPage(
-        context,
-        GroupSettingsPage(groupId: widget.targetId),
-      );
+      await showPanelPage(context, GroupSettingsPage(groupId: widget.targetId));
     } else {
       return;
     }
@@ -508,30 +543,28 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   }) async {
     List<ChatMessage> raw;
     if (_isPrivate) {
-      raw = (await ImApi.getPrivateMessageList(
-        receiverId: widget.targetId,
-        limit: _pageSize,
-        maxId: maxId,
-      ))
-          .where((m) => !m.isDeleted) // status=3 已删除不展示
-          .map(ChatMessage.fromPrivate)
-          .toList();
+      raw =
+          (await ImApi.getPrivateMessageList(
+                receiverId: widget.targetId,
+                limit: _pageSize,
+                maxId: maxId,
+              ))
+              .where((m) => !m.isDeleted) // status=3 已删除不展示
+              .map(ChatMessage.fromPrivate)
+              .toList();
     } else if (_isGroup) {
       raw = (await ImApi.getGroupMessageList(
         groupId: widget.targetId,
         limit: _pageSize,
         maxId: maxId,
-      ))
-          .map(ChatMessage.fromGroup)
-          .toList();
+      )).map(ChatMessage.fromGroup).toList();
     } else {
       // 频道：无服务端 list 接口，读 pull 全量缓存后内存分页
       final all = await _ensureChannelAll();
-      raw = (maxId == null
-              ? all
-              : all.where((m) => (m.id ?? 0) < maxId).toList())
-          .take(_pageSize)
-          .toList();
+      raw =
+          (maxId == null ? all : all.where((m) => (m.id ?? 0) < maxId).toList())
+              .take(_pageSize)
+              .toList();
     }
     final cutoff = _clearedCutoff;
     final visible = raw.where((m) {
@@ -581,9 +614,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       setState(() {
         // 去重防御：与翻页边界/并发刷新重叠的消息不重复追加
         final existKeys = _messages.map((m) => m.key).toSet();
-        _messages.addAll(
-          result.visible.where((m) => existKeys.add(m.key)),
-        );
+        _messages.addAll(result.visible.where((m) => existKeys.add(m.key)));
         // 满页判定用过滤信号前的原始条数
         if (result.rawCount < _pageSize) _noMore = true;
       });
@@ -618,10 +649,8 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
           // 时间倒序（最新在前）：本地占位（2204 提示等）按各自插入
           // 时刻与历史消息混排，后续新消息会把它顶上去；
           // 服务端消息 sendTime 与本地占位同为本地时区 DateTime，可直接比较
-          final ta =
-              a.sendTime ?? DateTime.fromMillisecondsSinceEpoch(1 << 40);
-          final tb =
-              b.sendTime ?? DateTime.fromMillisecondsSinceEpoch(1 << 40);
+          final ta = a.sendTime ?? DateTime.fromMillisecondsSinceEpoch(1 << 40);
+          final tb = b.sendTime ?? DateTime.fromMillisecondsSinceEpoch(1 << 40);
           final c = tb.compareTo(ta);
           if (c != 0) return c;
           // 同一时刻：服务端消息按 id 倒序；本地占位（id=null 视作 0）随后
@@ -914,6 +943,125 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     await _performSend(local);
   }
 
+  // ---------------------------------------------------------------------
+  // 桌面端截图粘贴发送（⌘V / Ctrl+V）
+  // ---------------------------------------------------------------------
+
+  /// 键盘拦截：桌面布局下捕获 ⌘V / Ctrl+V，交给 [_handleDesktopPaste]
+  /// 统一分流（截图发送 / 文本插入），阻止 Flutter 默认粘贴行为。
+  KeyEventResult _onDesktopPasteKey(FocusNode node, KeyEvent event) {
+    if (!isDesktopLayout(context)) return KeyEventResult.ignored;
+    // 只响应首次按下（抬起与按住重复 KeyRepeatEvent 均忽略）
+    if (event is! KeyDownEvent) {
+      return KeyEventResult.ignored;
+    }
+    final hk = HardwareKeyboard.instance;
+    final isPaste =
+        event.logicalKey == LogicalKeyboardKey.keyV &&
+        (hk.isMetaPressed || hk.isControlPressed);
+    if (!isPaste) return KeyEventResult.ignored;
+    unawaited(_handleDesktopPaste());
+    return KeyEventResult.handled;
+  }
+
+  /// 粘贴分流：剪贴板有截图 → 写临时文件复用 [_sendImageFile] 发送；
+  /// 无图片 → 手动读取剪贴板文本插入输入框光标处（事件已被 handled，
+  /// 系统默认文本粘贴不会执行，需自行兜底）。
+  Future<void> _handleDesktopPaste() async {
+    final Uint8List? raw = await DesktopNotifyService.getClipboardImage();
+    if (raw == null || raw.isEmpty) {
+      // 无图片：文本粘贴兜底
+      final data = await Clipboard.getData(Clipboard.kTextPlain);
+      final clip = data?.text;
+      if (clip == null || clip.isEmpty || !mounted) return;
+      final sel = _inputCtrl.selection;
+      final text = _inputCtrl.text;
+      if (sel.base.offset >= 0 && sel.extent.offset >= 0) {
+        // 光标/选区处插入
+        _inputCtrl.text = text.replaceRange(sel.start, sel.end, clip);
+        _inputCtrl.selection = TextSelection.collapsed(
+          offset: sel.start + clip.length,
+        );
+      } else {
+        _inputCtrl.text = text + clip;
+        _inputCtrl.selection = TextSelection.collapsed(
+          offset: _inputCtrl.text.length,
+        );
+      }
+      return;
+    }
+
+    // 有图片：
+    // - macOS：原生侧已转 PNG 字节，直接写 .png；
+    // - Windows：原生侧返回 CF_DIB（无文件头 DIB），补 BMP 头转码 JPG
+    Uint8List imageBytes;
+    String ext;
+    if (Platform.isWindows) {
+      final jpg = _dibToJpg(raw);
+      if (jpg == null) {
+        if (mounted) _showSnack('粘贴的图片格式无法识别');
+        return;
+      }
+      imageBytes = jpg;
+      ext = 'jpg';
+    } else {
+      imageBytes = raw;
+      ext = 'png';
+    }
+
+    try {
+      // 写临时文件复用图片发送链路（校验/占位/上传/发消息）
+      final dir = await getTemporaryDirectory();
+      if (!await dir.exists()) await dir.create(recursive: true);
+      final file = File(
+        '${dir.path}/paste_${DateTime.now().millisecondsSinceEpoch}.$ext',
+      );
+      await file.writeAsBytes(imageBytes);
+      await _sendImageFile(file.path);
+    } catch (e) {
+      debugPrint('[Chat] 粘贴图片发送失败: $e');
+      if (mounted) _showSnack('粘贴图片发送失败，请重试');
+    }
+  }
+
+  /// Windows CF_DIB 原始字节 → JPG：DIB 是无文件头的 BITMAPINFOHEADER，
+  /// 补 14 字节 BITMAPFILEHEADER（含调色板偏移计算）后用 image 包解码，
+  /// 再重编码为 JPG（quality 90）。
+  Uint8List? _dibToJpg(Uint8List dib) {
+    if (dib.length < 40) return null;
+    int readLE32(int off) =>
+        dib[off] |
+        (dib[off + 1] << 8) |
+        (dib[off + 2] << 16) |
+        (dib[off + 3] << 24);
+
+    final biSize = readLE32(0); // 信息头大小（40/108/124）
+    final bitCount = dib[14] | (dib[15] << 8); // 位数
+    final clrUsed = readLE32(32); // 调色板条目数（0=按位数推）
+    final compression = readLE32(16); // BI_RGB=0 / BI_BITFIELDS=3
+    int paletteEntries = 0;
+    if (bitCount > 0 && bitCount <= 8) {
+      paletteEntries = clrUsed > 0 ? clrUsed : (1 << bitCount);
+    }
+    // BI_BITFIELDS 的颜色掩码占 3 个调色板条目位
+    if (compression == 3) paletteEntries += 3;
+    final pixelOffset = 14 + biSize + paletteEntries * 4;
+
+    // 补 BMP 文件头：'BM' + 文件总大小 + 保留 + 像素数据偏移
+    final header = ByteData(14);
+    header.setUint8(0, 0x42); // 'B'
+    header.setUint8(1, 0x4D); // 'M'
+    header.setUint32(2, 14 + dib.length, Endian.little);
+    header.setUint32(10, pixelOffset, Endian.little);
+    final bmp = BytesBuilder();
+    bmp.add(header.buffer.asUint8List());
+    bmp.add(dib);
+
+    final decoded = img.decodeBmp(bmp.toBytes());
+    if (decoded == null) return null;
+    return img.encodeJpg(decoded, quality: 90);
+  }
+
   /// 视频：相册+相机，强制压缩；双文件上传（视频 90% + 封面 10%）。
   Future<void> _handleSendVideo() async {
     setState(() => _morePanelOpen = false);
@@ -1083,12 +1231,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     final clientMessageId = generateClientMessageId();
     final placeholder = ChatMessage.localFile(
       clientMessageId: clientMessageId,
-      payload: FilePayload(
-        url: path,
-        name: f.name,
-        size: size,
-        type: ext,
-      ),
+      payload: FilePayload(url: path, name: f.name, size: size, type: ext),
     );
     setState(() => _messages.insert(0, placeholder));
     _scrollToBottom();
@@ -1111,12 +1254,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
 
     final local = ChatMessage.localFile(
       clientMessageId: clientMessageId,
-      payload: FilePayload(
-        url: url,
-        name: f.name,
-        size: size,
-        type: ext,
-      ),
+      payload: FilePayload(url: url, name: f.name, size: size, type: ext),
     );
     _replaceMessage(local);
     await _performSend(local);
@@ -1416,12 +1554,8 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     setState(() => _fileDownloadProgress[key] = 0.0);
     try {
       // 文件名按消息 key 存放，避免不同消息同名文件互相覆盖
-      final safeName = payload.name.replaceAll(
-        RegExp(r'[/\\:*?"<>|]'),
-        '_',
-      );
-      final dir =
-          '${(await getTemporaryDirectory()).path}/files/$key';
+      final safeName = payload.name.replaceAll(RegExp(r'[/\\:*?"<>|]'), '_');
+      final dir = '${(await getTemporaryDirectory()).path}/files/$key';
       await Directory(dir).create(recursive: true);
       final savePath = '$dir/$safeName';
       await ApiClient.dio.download(
@@ -1466,8 +1600,9 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     final cached = _voiceLocalCache[url];
     if (cached != null) return Future.value(cached);
     // 整体超时：OSS 偶发挂起时不让用户无限等待（超时走播放失败提示）
-    return _voiceResolving[url] ??= _downloadVoiceToLocal(url)
-        .timeout(const Duration(seconds: 15));
+    return _voiceResolving[url] ??= _downloadVoiceToLocal(
+      url,
+    ).timeout(const Duration(seconds: 15));
   }
 
   Future<String> _downloadVoiceToLocal(String url) async {
@@ -1487,7 +1622,8 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       final bytes = builder.toBytes();
 
       // ftyp box（偏移 4~7 = 'f','t','y','p'）→ ISO-BMFF 容器，重命名为 .m4a
-      final isMp4 = bytes.length >= 8 &&
+      final isMp4 =
+          bytes.length >= 8 &&
           bytes[4] == 0x66 &&
           bytes[5] == 0x74 &&
           bytes[6] == 0x79 &&
@@ -1570,12 +1706,14 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   /// 其余情况（上传成功但发送失败）直接重走发送接口。
   void _retryMessage(ChatMessage message) {
     if (message.status != ChatMessageStatus.failed) return;
-    final isMedia = message.type == ChatMsgType.image ||
+    final isMedia =
+        message.type == ChatMsgType.image ||
         message.type == ChatMsgType.video ||
         message.type == ChatMsgType.file;
     if (isMedia) {
       final url = message.contentMap['url']?.toString() ?? '';
-      final isLocal = url.startsWith('/') ||
+      final isLocal =
+          url.startsWith('/') ||
           url.startsWith('file://') ||
           !url.startsWith('http');
       if (isLocal) {
@@ -1607,8 +1745,8 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     final type = _isPrivate
         ? ImConversationType.private
         : _isGroup
-            ? ImConversationType.group
-            : ImConversationType.channel;
+        ? ImConversationType.group
+        : ImConversationType.channel;
     Future<void> req;
     if (_isPrivate) {
       req = ImApi.markPrivateRead(receiverId: targetId, messageId: latestId);
@@ -1617,11 +1755,12 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     } else {
       req = ImApi.markChannelRead(channelId: targetId, messageId: latestId);
     }
-    req.then((_) {
-      // 上报成功：本地即时清零会话未读（不等下次全量拉取）
-      ConversationStore.instance
-          .markReadLocally(type, targetId, latestId!);
-    }).catchError((Object _) {}); // 上报失败静默，下次触发会重试
+    req
+        .then((_) {
+          // 上报成功：本地即时清零会话未读（不等下次全量拉取）
+          ConversationStore.instance.markReadLocally(type, targetId, latestId!);
+        })
+        .catchError((Object _) {}); // 上报失败静默，下次触发会重试
   }
 
   /// 拉取对方已读位置（私聊「已读/未读」小字）。
@@ -1692,10 +1831,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       final both = await _showPrivateDeleteConfirm();
       if (both == null) return;
       try {
-        await ImApi.deletePrivateMessage(
-          messageId: minId,
-          bothSides: both,
-        );
+        await ImApi.deletePrivateMessage(messageId: minId, bothSides: both);
       } catch (e) {
         if (mounted) _showSnack(ApiClient.errorMessage(e));
         return;
@@ -1822,8 +1958,9 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
 
   /// 多选批量转发。
   void _forwardSelected() {
-    final selected = _messages.where((m) => _selectedKeys.contains(m.key)).toList()
-      ..sort((a, b) => (b.id ?? 0).compareTo(a.id ?? 0));
+    final selected =
+        _messages.where((m) => _selectedKeys.contains(m.key)).toList()
+          ..sort((a, b) => (b.id ?? 0).compareTo(a.id ?? 0));
     if (selected.isEmpty) return;
     showModalBottomSheet<void>(
       context: context,
@@ -1890,79 +2027,85 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    return GestureDetector(
-      // 点击空白收起键盘与表情面板
-      behavior: HitTestBehavior.translucent,
-      onTap: () {
-        FocusScope.of(context).unfocus();
-        if (_facePanelOpen || _morePanelOpen) {
-          setState(() {
-            _facePanelOpen = false;
-            _morePanelOpen = false;
-          });
-        }
-      },
-      child: Scaffold(
-        backgroundColor: colors.bg,
-        // 关闭 Scaffold 自动缩放，改用手动 viewInsets padding：
-        // 键盘与表情面板严格互斥（面板打开时 padding 恒为 0），
-        // 避免键盘收起动画与面板展开叠加导致 Column 溢出
-        resizeToAvoidBottomInset: false,
-        // 浅色模式用外观设置选中的聊天背景（渐变+点阵）；深色模式保持纯色
-        body: Stack(
-          children: [
-            if (Theme.of(context).brightness == Brightness.light)
-              Positioned.fill(
-                // ListenableBuilder：外观设置切换背景后聊天室实时生效
-                child: ListenableBuilder(
-                  listenable: ChatBackgroundStore.instance,
-                  builder: (_, _) => ChatBackgroundLayer(
-                    bg: ChatBackgroundStore.instance.bg,
+    return Focus(
+      // 桌面端：⌘V / Ctrl+V 粘贴截图发送（事件冒泡自输入框等子节点）
+      onKeyEvent: _onDesktopPasteKey,
+      child: GestureDetector(
+        // 点击空白收起键盘与表情面板
+        behavior: HitTestBehavior.translucent,
+        onTap: () {
+          FocusScope.of(context).unfocus();
+          if (_facePanelOpen || _morePanelOpen) {
+            setState(() {
+              _facePanelOpen = false;
+              _morePanelOpen = false;
+            });
+          }
+        },
+        child: Scaffold(
+          backgroundColor: colors.bg,
+          // 关闭 Scaffold 自动缩放，改用手动 viewInsets padding：
+          // 键盘与表情面板严格互斥（面板打开时 padding 恒为 0），
+          // 避免键盘收起动画与面板展开叠加导致 Column 溢出
+          resizeToAvoidBottomInset: false,
+          // 浅色模式用外观设置选中的聊天背景（渐变+点阵）；深色模式保持纯色
+          body: Stack(
+            children: [
+              if (Theme.of(context).brightness == Brightness.light)
+                Positioned.fill(
+                  // ListenableBuilder：外观设置切换背景后聊天室实时生效
+                  child: ListenableBuilder(
+                    listenable: ChatBackgroundStore.instance,
+                    builder: (_, _) => ChatBackgroundLayer(
+                      bg: ChatBackgroundStore.instance.bg,
+                    ),
                   ),
                 ),
+              Column(
+                children: [
+                  _buildHeader(colors),
+                  Expanded(child: _buildMessageList(colors)),
+                  // 输入栏保持在表情面板头顶（微信布局）；键盘弹出时悬于键盘上方
+                  Padding(
+                    padding: EdgeInsets.only(
+                      bottom: (_facePanelOpen || _morePanelOpen)
+                          ? 0
+                          : MediaQuery.of(context).viewInsets.bottom,
+                    ),
+                    // 多选模式：输入栏替换为批量操作栏
+                    child: _selectionMode
+                        ? _buildMultiSelectBar(colors)
+                        : _buildInputBar(colors),
+                  ),
+                  // 内嵌表情面板：展开时显示在输入栏下方
+                  if (_facePanelOpen)
+                    FacePickerSheet(
+                      onEmojiSelected: (emoji) => _insertEmoji(emoji),
+                      onFaceSelected: (item) {
+                        _sendFace(item);
+                        setState(() => _facePanelOpen = false);
+                      },
+                      // 右下角叉号：删输入框末尾表情/字符（按字素逐个退格，
+                      // emoji 可能是多 code unit，用 characters 处理）
+                      onBackspace: () {
+                        final text = _inputCtrl.text;
+                        if (text.isEmpty) return;
+                        _inputCtrl.text = text.characters
+                            .skipLast(1)
+                            .toString();
+                        _inputCtrl.selection = TextSelection.collapsed(
+                          offset: _inputCtrl.text.length,
+                        );
+                      },
+                      // 右下角发送：发送输入框内容（emoji 随文本发出）
+                      onSend: () => _send(),
+                    ),
+                  // 内嵌更多（+）面板：与表情面板互斥
+                  if (_morePanelOpen) _buildMorePanel(colors),
+                ],
               ),
-            Column(
-              children: [
-                _buildHeader(colors),
-                Expanded(child: _buildMessageList(colors)),
-                // 输入栏保持在表情面板头顶（微信布局）；键盘弹出时悬于键盘上方
-                Padding(
-                  padding: EdgeInsets.only(
-                    bottom: (_facePanelOpen || _morePanelOpen)
-                        ? 0
-                        : MediaQuery.of(context).viewInsets.bottom,
-                  ),
-                  // 多选模式：输入栏替换为批量操作栏
-                  child: _selectionMode
-                      ? _buildMultiSelectBar(colors)
-                      : _buildInputBar(colors),
-                ),
-                // 内嵌表情面板：展开时显示在输入栏下方
-                if (_facePanelOpen)
-                  FacePickerSheet(
-                    onEmojiSelected: (emoji) => _insertEmoji(emoji),
-                    onFaceSelected: (item) {
-                      _sendFace(item);
-                      setState(() => _facePanelOpen = false);
-                    },
-                    // 右下角叉号：删输入框末尾表情/字符（按字素逐个退格，
-                    // emoji 可能是多 code unit，用 characters 处理）
-                    onBackspace: () {
-                      final text = _inputCtrl.text;
-                      if (text.isEmpty) return;
-                      _inputCtrl.text =
-                          text.characters.skipLast(1).toString();
-                      _inputCtrl.selection = TextSelection.collapsed(
-                          offset: _inputCtrl.text.length);
-                    },
-                    // 右下角发送：发送输入框内容（emoji 随文本发出）
-                    onSend: () => _send(),
-                  ),
-                // 内嵌更多（+）面板：与表情面板互斥
-                if (_morePanelOpen) _buildMorePanel(colors),
-              ],
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -1975,17 +2118,17 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       child: SafeArea(
         bottom: false,
         child: SizedBox(
-            height: 48,
-            child: Row(
-              children: [
-                // 内嵌模式无路由可返回：占位保持标题居中
-                widget.embedded
-                    ? const SizedBox(width: 48)
-                    : IconButton(
-                        icon: const Icon(Icons.arrow_back_ios_new, size: 20),
-                        color: colors.surfaceText,
-                        onPressed: () => Navigator.of(context).pop(),
-                      ),
+          height: 48,
+          child: Row(
+            children: [
+              // 内嵌模式无路由可返回：占位保持标题居中
+              widget.embedded
+                  ? const SizedBox(width: 48)
+                  : IconButton(
+                      icon: const Icon(Icons.arrow_back_ios_new, size: 20),
+                      color: colors.surfaceText,
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
               Expanded(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -2010,8 +2153,8 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                         style: TextStyle(
                           fontSize: 10,
                           height: 1.2,
-                          color: PresenceStore.instance
-                                  .isOnline(widget.targetId)
+                          color:
+                              PresenceStore.instance.isOnline(widget.targetId)
                               ? const Color(0xFF07C160)
                               : colors.muted,
                         ),
@@ -2260,78 +2403,87 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
         // 背景切换后底端色同步（与背景层同源同刷）
         listenable: ChatBackgroundStore.instance,
         builder: (_, _) => Container(
-        // 与聊天背景渐变底端色一致（无缝融入）；深色模式回纯色
-        color: isLight
-            ? ChatBackgroundStore.instance.bg.gradient.colors.last
-            : colors.bg,
-        // 底部 10 + SafeArea：保证 home indicator 区域不贴边
-        padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // 引用回复预览条（设了回复目标时显示）
-            ?_buildReplyPreview(colors),
-            Row(
-          children: [
-            // 语音/键盘模式切换
-            _buildModeToggle(colors),
-            const SizedBox(width: 6),
-            Expanded(
-              child: _voiceMode
-                  ? HoldToTalkButton(onDone: _onVoiceRecorded)
-                  : TextField(
-                      controller: _inputCtrl,
-                      focusNode: _inputFocus,
-                      textInputAction: TextInputAction.send,
-                      onSubmitted: (_) => _send(),
-                      style: TextStyle(fontSize: 15, color: colors.text),
-                      decoration: InputDecoration(
-                        isDense: true,
-                        hintText: '输入消息...',
-                        hintStyle: TextStyle(fontSize: 15, color: colors.muted),
-                        filled: true,
-                        // 比输入栏底色略深的灰米色，形成胶囊区分
-                        fillColor: isLight
-                            ? const Color(0xFFE4E0D8)
-                            : colors.card,
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 10,
-                        ),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(22),
-                          borderSide: BorderSide.none,
-                        ),
-                      ),
+          // 与聊天背景渐变底端色一致（无缝融入）；深色模式回纯色
+          color: isLight
+              ? ChatBackgroundStore.instance.bg.gradient.colors.last
+              : colors.bg,
+          // 底部 10 + SafeArea：保证 home indicator 区域不贴边
+          padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 引用回复预览条（设了回复目标时显示）
+              ?_buildReplyPreview(colors),
+              Row(
+                children: [
+                  // 语音/键盘模式切换
+                  _buildModeToggle(colors),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: _voiceMode
+                        ? HoldToTalkButton(onDone: _onVoiceRecorded)
+                        : TextField(
+                            controller: _inputCtrl,
+                            focusNode: _inputFocus,
+                            textInputAction: TextInputAction.send,
+                            onSubmitted: (_) {
+                              unawaited(_send());
+                              // 手机端：键盘「发送」键触发后默认断开编辑
+                              // 连接收起键盘；重新聚焦保持键盘弹出，
+                              // 连续发消息不用反复点输入框
+                              _inputFocus.requestFocus();
+                            },
+                            style: TextStyle(fontSize: 15, color: colors.text),
+                            decoration: InputDecoration(
+                              isDense: true,
+                              hintText: '输入消息...',
+                              hintStyle: TextStyle(
+                                fontSize: 15,
+                                color: colors.muted,
+                              ),
+                              filled: true,
+                              // 比输入栏底色略深的灰米色，形成胶囊区分
+                              fillColor: isLight
+                                  ? const Color(0xFFE4E0D8)
+                                  : colors.card,
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 10,
+                              ),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(22),
+                                borderSide: BorderSide.none,
+                              ),
+                            ),
+                          ),
+                  ),
+                  const SizedBox(width: 6),
+                  // 表情按钮：切换表情面板（emoji 插入输入框 / 图片表情直接发送）
+                  IconButton(
+                    onPressed: _toggleFacePanel,
+                    icon: Icon(
+                      Icons.emoji_emotions_outlined,
+                      size: 28,
+                      color: _facePanelOpen ? AppColors.lime : colors.text,
                     ),
-            ),
-            const SizedBox(width: 6),
-            // 表情按钮：切换表情面板（emoji 插入输入框 / 图片表情直接发送）
-            IconButton(
-              onPressed: _toggleFacePanel,
-              icon: Icon(
-                Icons.emoji_emotions_outlined,
-                size: 28,
-                color: _facePanelOpen ? AppColors.lime : colors.text,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  const SizedBox(width: 2),
+                  // 更多（+）：图片/视频/文件等扩展入口
+                  IconButton(
+                    onPressed: _toggleMorePanel,
+                    icon: Icon(
+                      Icons.add_circle_outline,
+                      size: 28,
+                      color: _morePanelOpen ? AppColors.lime : colors.text,
+                    ),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ],
               ),
-              visualDensity: VisualDensity.compact,
-            ),
-            const SizedBox(width: 2),
-            // 更多（+）：图片/视频/文件等扩展入口
-            IconButton(
-              onPressed: _toggleMorePanel,
-              icon: Icon(
-                Icons.add_circle_outline,
-                size: 28,
-                color: _morePanelOpen ? AppColors.lime : colors.text,
-              ),
-              visualDensity: VisualDensity.compact,
-            ),
-          ],
-            ),
-          ],
+            ],
+          ),
         ),
-      ),
       ),
     );
   }
@@ -2664,7 +2816,8 @@ class _MessageItem extends StatelessWidget {
           ],
         ),
       );
-    } else if (message.type == ChatMsgType.voice && message.voicePayload != null) {
+    } else if (message.type == ChatMsgType.voice &&
+        message.voicePayload != null) {
       // 渲染即后台预热缓存（内部去重），点击时命中即秒播
       final vUrl = normalizeFaceUrl(message.voicePayload!.url);
       if (vUrl.isNotEmpty) onPrefetchVoice(vUrl);
@@ -2727,9 +2880,9 @@ class _MessageItem extends StatelessWidget {
       content = GestureDetector(
         onTap: card.isGroupCard
             ? () => showPanelPage(
-                  context,
-                  GroupSettingsPage(groupId: card.targetId),
-                )
+                context,
+                GroupSettingsPage(groupId: card.targetId),
+              )
             : () => onOpenProfile(card.targetId),
         child: _CardBubbleBody(payload: card),
       );
@@ -2747,7 +2900,8 @@ class _MessageItem extends StatelessWidget {
                   ScaffoldMessenger.of(context)
                     ..hideCurrentSnackBar()
                     ..showSnackBar(
-                        const SnackBar(content: Text('链接已复制，请在浏览器打开')));
+                      const SnackBar(content: Text('链接已复制，请在浏览器打开')),
+                    );
                   return;
                 }
                 if (m.materialId > 0) {
@@ -2773,7 +2927,8 @@ class _MessageItem extends StatelessWidget {
 
     final isVoice = message.type == ChatMsgType.voice;
     // 表情/图片/视频/频道素材为 plain 气泡（对齐 H5）：不加背景色，直接透出会话背景
-    final isPlainMedia = message.type == ChatMsgType.face ||
+    final isPlainMedia =
+        message.type == ChatMsgType.face ||
         message.type == ChatMsgType.image ||
         message.type == ChatMsgType.video ||
         message.type == ChatMsgType.material;
@@ -2800,9 +2955,8 @@ class _MessageItem extends StatelessWidget {
                 ? () => onToggleSelect(message)
                 : (isVoice ? () => onPlayVoice(message) : null)),
       // 长按菜单仅移动端；桌面端统一用右键（见 onSecondaryTapUp）
-      onLongPress: message.operable &&
-              !selectionMode &&
-              !isDesktopLayout(context)
+      onLongPress:
+          message.operable && !selectionMode && !isDesktopLayout(context)
           ? () => _showActions(context)
           : null,
       // 桌面端鼠标右键：菜单出现在光标处（对齐微信 PC 右键消息）
@@ -2814,7 +2968,8 @@ class _MessageItem extends StatelessWidget {
       behavior: isVoice ? HitTestBehavior.opaque : HitTestBehavior.deferToChild,
       child: Container(
         constraints: const BoxConstraints(maxWidth: 260),
-        padding: (message.type == ChatMsgType.face ||
+        padding:
+            (message.type == ChatMsgType.face ||
                 message.type == ChatMsgType.image ||
                 message.type == ChatMsgType.video ||
                 message.type == ChatMsgType.material)
@@ -2822,9 +2977,7 @@ class _MessageItem extends StatelessWidget {
                   .zero // 表情/图片/视频/频道素材大图不加内边距
             : const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
         decoration: BoxDecoration(
-          color: isPlainMedia
-              ? null
-              : (isSelf ? AppColors.lime : colors.card),
+          color: isPlainMedia ? null : (isSelf ? AppColors.lime : colors.card),
           borderRadius: BorderRadius.only(
             topLeft: const Radius.circular(12),
             topRight: const Radius.circular(12),
@@ -2886,7 +3039,7 @@ class _MessageItem extends StatelessWidget {
     // 频道素材消息（对齐 H5 isChannelMaterial）：无头像、居中展示、无状态角标
     final isChannelMaterial =
         conversationType == ImConversationType.channel.value &&
-            message.type == ChatMsgType.material;
+        message.type == ChatMsgType.material;
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
@@ -2965,8 +3118,8 @@ class _MessageItem extends StatelessWidget {
     final forwardable = message.operable; // 有 id + 正常类型 + 已确认
     final isFile = message.type == ChatMsgType.file;
     final isImage = message.type == ChatMsgType.image;
-    final isMediaFace = message.type == ChatMsgType.image ||
-        message.type == ChatMsgType.face;
+    final isMediaFace =
+        message.type == ChatMsgType.image || message.type == ChatMsgType.face;
 
     // 删除仅对「不可撤回」的消息显示（对齐 H5：自己发的过期消息 / 别人发的）
     final deletable = !recallable;
@@ -2974,27 +3127,18 @@ class _MessageItem extends StatelessWidget {
     // 菜单项（文本色/点击回调）
     final items = <(IconData, String, Color?, VoidCallback)>[
       if (isImage)
-        (
-          Icons.save_outlined,
-          '保存图片',
-          null,
-          () => _saveImage(context),
-        ),
-      if (forwardable)
-        (Icons.format_quote, '引用', null, () => onQuote(message)),
+        (Icons.save_outlined, '保存图片', null, () => _saveImage(context)),
+      if (forwardable) (Icons.format_quote, '引用', null, () => onQuote(message)),
       if (message.type == ChatMsgType.text)
         (
           Icons.content_copy,
           '复制',
           null,
-          () => Clipboard.setData(
-            ClipboardData(text: message.displayText),
-          ),
+          () => Clipboard.setData(ClipboardData(text: message.displayText)),
         ),
       if (forwardable)
         (Icons.shortcut_outlined, '转发', null, () => onForward(message)),
-      if (recallable)
-        (Icons.undo, '撤回', null, () => onRecall()),
+      if (recallable) (Icons.undo, '撤回', null, () => onRecall()),
       if (isFile)
         (
           Icons.link,
@@ -3017,12 +3161,7 @@ class _MessageItem extends StatelessWidget {
           () => onAddFace(message),
         ),
       if (forwardable)
-        (
-          Icons.checklist,
-          '多选',
-          null,
-          () => onEnterMultiSelect(message),
-        ),
+        (Icons.checklist, '多选', null, () => onEnterMultiSelect(message)),
       if (deletable)
         (Icons.delete_outline, '删除', Colors.red, () => onDeleteLocal(message)),
     ];
@@ -3054,11 +3193,9 @@ class _MessageItem extends StatelessWidget {
               onTap: action,
               child: Row(
                 children: [
-                  Icon(icon, size: 20,
-                      color: color ?? context.colors.muted),
+                  Icon(icon, size: 20, color: color ?? context.colors.muted),
                   const SizedBox(width: 10),
-                  Text(label,
-                      style: TextStyle(fontSize: 14, color: color)),
+                  Text(label, style: TextStyle(fontSize: 14, color: color)),
                 ],
               ),
             ),
@@ -3099,9 +3236,10 @@ class _MessageItem extends StatelessWidget {
   }
 
   /// 保存图片消息（复用顶层 [_saveImageToGalleryOrDisk]）。
-  Future<void> _saveImage(BuildContext context) =>
-      _saveImageToGalleryOrDisk(
-          context, normalizeFaceUrl(message.imagePayload?.url ?? ''));
+  Future<void> _saveImage(BuildContext context) => _saveImageToGalleryOrDisk(
+    context,
+    normalizeFaceUrl(message.imagePayload?.url ?? ''),
+  );
 }
 
 /// 保存图片到本地：
@@ -3111,8 +3249,9 @@ class _MessageItem extends StatelessWidget {
 Future<void> _saveImageToGalleryOrDisk(BuildContext context, String url) async {
   if (url.isEmpty) return;
   final messenger = ScaffoldMessenger.of(context);
-  void toast(String text) =>
-      messenger..hideCurrentSnackBar()..showSnackBar(SnackBar(content: Text(text)));
+  void toast(String text) => messenger
+    ..hideCurrentSnackBar()
+    ..showSnackBar(SnackBar(content: Text(text)));
   // 桌面/移动分流需在 await 前取（避免 async gap 后用 context）
   final desktop = isDesktopLayout(context);
   try {
@@ -3140,9 +3279,11 @@ Future<void> _saveImageToGalleryOrDisk(BuildContext context, String url) async {
         name: name,
       );
       final ok = result is Map && result['isSuccess'] == true;
-      toast(ok
-          ? '已保存到相册'
-          : '保存失败：${result is Map ? (result['errorMessage'] ?? '') : ''}');
+      toast(
+        ok
+            ? '已保存到相册'
+            : '保存失败：${result is Map ? (result['errorMessage'] ?? '') : ''}',
+      );
     }
   } catch (e) {
     toast('保存失败：$e');
@@ -3269,13 +3410,16 @@ class _FaceBubbleBody extends StatelessWidget {
 
 /// 判断是否为本地文件路径（上传期间 url 为本地路径，用 Image.file 预览）。
 bool _isLocalPath(String url) =>
-    url.startsWith('/') ||
-    url.startsWith('file://') ||
-    !url.startsWith('http');
+    url.startsWith('/') || url.startsWith('file://') || !url.startsWith('http');
 
 /// 图片扩展名（对齐 H5 IMAGE_FILE_EXTENSIONS）：文件消息 URL 命中则走全屏预览而非下载打开。
 const List<String> _imageFileExtensions = [
-  'bmp', 'gif', 'jpeg', 'jpg', 'png', 'webp',
+  'bmp',
+  'gif',
+  'jpeg',
+  'jpg',
+  'png',
+  'webp',
 ];
 
 /// URL 是否指向图片（按路径后缀判断，忽略 query/fragment）。
@@ -3332,14 +3476,20 @@ class _ImageBubbleBody extends StatelessWidget {
     );
     final img = _isLocalPath(url)
         ? Image.file(File(url), fit: BoxFit.cover)
-        : Image.network(url, fit: BoxFit.cover, errorBuilder: (_, _, _) {
-            return Container(
-              color: context.colors.divider,
-              alignment: Alignment.center,
-              child: Text('[图片]',
-                  style: TextStyle(fontSize: 12, color: context.colors.muted)),
-            );
-          });
+        : Image.network(
+            url,
+            fit: BoxFit.cover,
+            errorBuilder: (_, _, _) {
+              return Container(
+                color: context.colors.divider,
+                alignment: Alignment.center,
+                child: Text(
+                  '[图片]',
+                  style: TextStyle(fontSize: 12, color: context.colors.muted),
+                ),
+              );
+            },
+          );
     return SizedBox(
       width: w,
       height: h,
@@ -3381,20 +3531,30 @@ class _VideoBubbleBody extends StatelessWidget {
       coverImg = Container(
         color: Colors.black87,
         alignment: Alignment.center,
-        child: const Icon(Icons.play_circle_fill, size: 48, color: Colors.white70),
+        child: const Icon(
+          Icons.play_circle_fill,
+          size: 48,
+          color: Colors.white70,
+        ),
       );
     } else if (_isLocalPath(cover)) {
       coverImg = Image.file(File(cover), fit: BoxFit.cover);
     } else {
-      coverImg = Image.network(normalizeFaceUrl(cover), fit: BoxFit.cover,
-          errorBuilder: (_, _, _) {
-        return Container(
-          color: Colors.black87,
-          alignment: Alignment.center,
-          child: const Icon(Icons.play_circle_fill,
-              size: 48, color: Colors.white70),
-        );
-      });
+      coverImg = Image.network(
+        normalizeFaceUrl(cover),
+        fit: BoxFit.cover,
+        errorBuilder: (_, _, _) {
+          return Container(
+            color: Colors.black87,
+            alignment: Alignment.center,
+            child: const Icon(
+              Icons.play_circle_fill,
+              size: 48,
+              color: Colors.white70,
+            ),
+          );
+        },
+      );
     }
     final dur = payload.duration;
     final durText = dur > 0
@@ -3563,8 +3723,8 @@ class _FileBubbleBody extends StatelessWidget {
     final barValue = uploading
         ? progress!.clamp(0.0, 1.0)
         : downloading
-            ? downloadProgress!.clamp(0.0, 1.0)
-            : null;
+        ? downloadProgress!.clamp(0.0, 1.0)
+        : null;
     return SizedBox(
       width: 240,
       child: Column(
@@ -3580,8 +3740,11 @@ class _FileBubbleBody extends StatelessWidget {
                   color: const Color(0xFFAF52DE).withValues(alpha: 0.15),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: const Icon(Icons.insert_drive_file,
-                    size: 24, color: Color(0xFFAF52DE)),
+                child: const Icon(
+                  Icons.insert_drive_file,
+                  size: 24,
+                  color: Color(0xFFAF52DE),
+                ),
               ),
               const SizedBox(width: 10),
               Expanded(
@@ -3593,9 +3756,10 @@ class _FileBubbleBody extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                          fontSize: 14,
-                          color: colors.text,
-                          fontWeight: FontWeight.w500),
+                        fontSize: 14,
+                        color: colors.text,
+                        fontWeight: FontWeight.w500,
+                      ),
                     ),
                     const SizedBox(height: 2),
                     Text(
@@ -3629,8 +3793,9 @@ class _FileBubbleBody extends StatelessWidget {
                     value: barValue,
                     minHeight: 3,
                     backgroundColor: colors.divider,
-                    valueColor:
-                        const AlwaysStoppedAnimation<Color>(AppColors.lime),
+                    valueColor: const AlwaysStoppedAnimation<Color>(
+                      AppColors.lime,
+                    ),
                   ),
                 ],
               ],
@@ -3692,13 +3857,19 @@ class _ImageViewerPage extends StatelessWidget {
                 children: [
                   IconButton(
                     tooltip: '保存图片',
-                    icon: const Icon(Icons.save_outlined,
-                        color: Colors.white, size: 24),
-                    onPressed: () =>
-                        _saveImageToGalleryOrDisk(context, url),
+                    icon: const Icon(
+                      Icons.save_outlined,
+                      color: Colors.white,
+                      size: 24,
+                    ),
+                    onPressed: () => _saveImageToGalleryOrDisk(context, url),
                   ),
                   IconButton(
-                    icon: const Icon(Icons.close, color: Colors.white, size: 26),
+                    icon: const Icon(
+                      Icons.close,
+                      color: Colors.white,
+                      size: 26,
+                    ),
                     onPressed: () => Navigator.of(context).pop(),
                   ),
                 ],
@@ -3902,9 +4073,8 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
           normalizeFaceUrl(widget.coverUrl),
           fit: BoxFit.contain,
           // 封面加载失败时显示加载圈（视频本身仍在初始化）
-          errorBuilder: (_, _, _) => const CircularProgressIndicator(
-            color: AppColors.lime,
-          ),
+          errorBuilder: (_, _, _) =>
+              const CircularProgressIndicator(color: AppColors.lime),
         ),
       );
     }
@@ -3977,10 +4147,7 @@ class _QuoteBlock extends StatelessWidget {
                     fit: BoxFit.cover,
                     errorBuilder: (_, _, _) => Text(
                       quote.summary,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: colors.muted,
-                      ),
+                      style: TextStyle(fontSize: 12, color: colors.muted),
                     ),
                   ),
                 ),
@@ -4295,10 +4462,7 @@ class _ForwardSheetState extends State<_ForwardSheet> {
                     decoration: InputDecoration(
                       isDense: true,
                       hintText: '给朋友留言（选填）',
-                      hintStyle: TextStyle(
-                        fontSize: 13,
-                        color: colors.muted,
-                      ),
+                      hintStyle: TextStyle(fontSize: 13, color: colors.muted),
                       counterText: '',
                       contentPadding: const EdgeInsets.symmetric(
                         horizontal: 12,
@@ -4420,13 +4584,11 @@ class _ReadReceiptSheetState extends State<_ReadReceiptSheet> {
       .where((m) => m.userId != widget.message.senderId)
       .toList();
 
-  List<ImGroupMember> get _readMembers => visibleMembers
-      .where((m) => _readUserIds.contains(m.userId))
-      .toList();
+  List<ImGroupMember> get _readMembers =>
+      visibleMembers.where((m) => _readUserIds.contains(m.userId)).toList();
 
-  List<ImGroupMember> get _unreadMembers => visibleMembers
-      .where((m) => !_readUserIds.contains(m.userId))
-      .toList();
+  List<ImGroupMember> get _unreadMembers =>
+      visibleMembers.where((m) => !_readUserIds.contains(m.userId)).toList();
 
   @override
   Widget build(BuildContext context) {
@@ -4531,49 +4693,46 @@ class _ReadReceiptSheetState extends State<_ReadReceiptSheet> {
                       child: CircularProgressIndicator(color: AppColors.lime),
                     )
                   : list.isEmpty
-                      ? Center(
-                          child: Text(
-                            _tabUnread ? '全部已读' : '暂无已读成员',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: colors.muted,
-                            ),
+                  ? Center(
+                      child: Text(
+                        _tabUnread ? '全部已读' : '暂无已读成员',
+                        style: TextStyle(fontSize: 13, color: colors.muted),
+                      ),
+                    )
+                  : ListView.builder(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      itemCount: list.length,
+                      itemBuilder: (context, index) {
+                        final m = list[index];
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 8,
                           ),
-                        )
-                      : ListView.builder(
-                          padding: const EdgeInsets.symmetric(vertical: 8),
-                          itemCount: list.length,
-                          itemBuilder: (context, index) {
-                            final m = list[index];
-                            return Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                                vertical: 8,
+                          child: Row(
+                            children: [
+                              ImAvatar(
+                                src: m.avatar,
+                                name: m.nickname,
+                                size: 38,
                               ),
-                              child: Row(
-                                children: [
-                                  ImAvatar(
-                                    src: m.avatar,
-                                    name: m.nickname,
-                                    size: 38,
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Text(
+                                  m.nickname,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: colors.text,
                                   ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: Text(
-                                      m.nickname,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        color: colors.text,
-                                      ),
-                                    ),
-                                  ),
-                                ],
+                                ),
                               ),
-                            );
-                          },
-                        ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
             ),
           ],
         ),
@@ -4636,7 +4795,9 @@ class _SystemTipText extends StatelessWidget {
   Widget build(BuildContext context) {
     final segments = _buildSegments();
     // 人名高亮蓝（微信链接色；深色主题用亮一档）
-    final mentionColor = dark ? const Color(0xFF7D90B0) : const Color(0xFF576B95);
+    final mentionColor = dark
+        ? const Color(0xFF7D90B0)
+        : const Color(0xFF576B95);
     return Text.rich(
       TextSpan(
         style: TextStyle(fontSize: 12, color: colors.muted, height: 1.4),
@@ -4644,12 +4805,10 @@ class _SystemTipText extends StatelessWidget {
           for (final s in segments)
             TextSpan(
               text: s.text,
-              style: s.isMention
-                  ? TextStyle(color: mentionColor)
-                  : null,
+              style: s.isMention ? TextStyle(color: mentionColor) : null,
               recognizer: s.isMention && s.userId != null
                   ? (TapGestureRecognizer()
-                    ..onTap = () => onMentionTap(s.userId!))
+                      ..onTap = () => onMentionTap(s.userId!))
                   : null,
             ),
         ],
@@ -4678,7 +4837,8 @@ class _CallMemberSheetState extends State<_CallMemberSheet> {
   Widget build(BuildContext context) {
     final colors = context.colors;
     // 移动端：屏高 60% 的底部弹层；桌面端：弹框窗口内固定高度
-    final height = isDesktopLayout(context) ? 420.0
+    final height = isDesktopLayout(context)
+        ? 420.0
         : MediaQuery.of(context).size.height * 0.6;
     return Container(
       height: height,

@@ -2,6 +2,9 @@
 
 #include <optional>
 #include <string>
+#include <vector>
+
+#include <cstring>
 
 #include <flutter/standard_method_codec.h>
 #include <mmsystem.h>
@@ -84,6 +87,29 @@ bool FlutterWindow::OnCreate() {
         } else if (method == "stopRingback") {
           PlaySoundW(nullptr, nullptr, 0);
           result->Success();
+        } else if (method == "getClipboardImage") {
+          // 读系统剪贴板截图：CF_DIB 原始字节返回（Dart 侧转码为 JPG）
+          if (!OpenClipboard(nullptr)) {
+            result->Success();
+            return;
+          }
+          std::vector<uint8_t> dib_bytes;
+          HANDLE hData = GetClipboardData(CF_DIB);
+          if (hData != nullptr) {
+            void* p = GlobalLock(hData);
+            if (p != nullptr) {
+              SIZE_T size = GlobalSize(hData);
+              dib_bytes.resize(static_cast<size_t>(size));
+              memcpy(dib_bytes.data(), p, static_cast<size_t>(size));
+              GlobalUnlock(hData);
+            }
+          }
+          CloseClipboard();
+          if (dib_bytes.empty()) {
+            result->Success();
+          } else {
+            result->Success(flutter::EncodableValue(dib_bytes));
+          }
         } else if (method == "bringToFront") {
           HWND hwnd = GetHandle();
           if (hwnd != nullptr) {

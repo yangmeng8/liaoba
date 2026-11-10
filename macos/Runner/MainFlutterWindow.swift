@@ -88,6 +88,19 @@ class MainFlutterWindow: NSWindow {
         self?.ringbackSound?.stop()
         self?.ringbackSound = nil
         result(nil)
+      case "getClipboardImage":
+        // 读系统剪贴板截图（截图工具写入 PNG/TIFF）：返回 PNG 字节，无图片返回 null
+        let pb = NSPasteboard.general
+        var pngData: Data? = nil
+        if let data = pb.data(forType: .png), !data.isEmpty {
+          pngData = data
+        } else if let tiff = pb.data(forType: .tiff), !tiff.isEmpty,
+          let rep = NSBitmapImageRep(data: tiff),
+          let converted = rep.representation(using: .png, properties: [:])
+        {
+          pngData = converted
+        }
+        result(pngData.map { FlutterStandardTypedData(bytes: $0) })
       case "bringToFront":
         NSApp.activate(ignoringOtherApps: true)
         let window = NSApp.mainWindow ?? NSApp.windows.first { !$0.isMiniaturized }

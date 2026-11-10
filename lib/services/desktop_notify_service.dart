@@ -175,6 +175,23 @@ class DesktopNotifyService with WidgetsBindingObserver {
     }
   }
 
+  /// 读取系统剪贴板中的截图（桌面端粘贴图片发送用）：
+  /// - macOS：NSPasteboard 的 PNG/TIFF → PNG 字节；
+  /// - Windows：剪贴板 CF_DIB 原始字节（调用方负责转码为 JPG）。
+  /// 返回 null 表示剪贴板当前没有图片。
+  static Future<Uint8List?> getClipboardImage() async {
+    try {
+      final dynamic res =
+          await _channel.invokeMethod<dynamic>('getClipboardImage');
+      if (res is Uint8List) return res;
+      if (res is List<int>) return Uint8List.fromList(res);
+      return null;
+    } catch (e) {
+      debugPrint('[DesktopNotify] 读取剪贴板图片失败: $e');
+      return null;
+    }
+  }
+
   void _showToast(ImWsNotification n, int targetId, int me) {
     if (!Platform.isWindows && !Platform.isMacOS) {
       return;

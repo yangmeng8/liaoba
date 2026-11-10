@@ -54,6 +54,7 @@ dependencies:
   video_compress: ^3.1.2
   livekit_client: ^2.12.0
   image_gallery_saver: ^2.0.3
+  image: ^4.5.4  # 纯 Dart 图像编解码（桌面粘贴截图 DIB→JPG 转码）
   jpush_flutter: 3.4.0  # 极光推送（原生侧）；Dart 侧用 lib/services/push_service.dart 自封装（修 onPluginAttached 握手）
   url_launcher: ^6.3.2  # 版本更新：跳外部浏览器下载 APK/安装页
   local_notifier: ^0.1.6  # Windows/macOS 系统通知（桌面端收到消息弹 Toast）
