@@ -247,7 +247,7 @@ class _MessagesPageState extends State<MessagesPage> {
         friendName: c.title,
       ),
     );
-    if (choice == null || !mounted) return;
+    if (choice == null || choice == 'cancel' || !mounted) return;
     try {
       await ConversationStore.instance.deleteConversation(
         c.type,
