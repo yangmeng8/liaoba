@@ -8,6 +8,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:image_gallery_saver/image_gallery_saver.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:open_filex/open_filex.dart';
@@ -2798,8 +2799,15 @@ class _MessageItem extends StatelessWidget {
           : (selectionMode
                 ? () => onToggleSelect(message)
                 : (isVoice ? () => onPlayVoice(message) : null)),
-      onLongPress: message.operable && !selectionMode
+      // 长按菜单仅移动端；桌面端统一用右键（见 onSecondaryTapUp）
+      onLongPress: message.operable &&
+              !selectionMode &&
+              !isDesktopLayout(context)
           ? () => _showActions(context)
+          : null,
+      // 桌面端鼠标右键：菜单出现在光标处（对齐微信 PC 右键消息）
+      onSecondaryTapUp: message.operable && !selectionMode
+          ? (d) => _showActions(context, menuPosition: d.globalPosition)
           : null,
       // 语音条整条气泡（含内边距空白）都要可点；其余类型保持默认，
       // 避免吞掉页面级点击（点空白收键盘）
@@ -2950,12 +2958,13 @@ class _MessageItem extends StatelessWidget {
 
   /// 长按菜单（对齐 H5 message-action-sheet：菜单项逐条动态计算，
   /// 纯函数判断——引用/复制/转发/撤回/复制文件链接/加表情/多选/删除）。
-  void _showActions(BuildContext context) {
+  void _showActions(BuildContext context, {Offset? menuPosition}) {
     HapticFeedback.lightImpact();
 
     final recallable = message.canRecall();
     final forwardable = message.operable; // 有 id + 正常类型 + 已确认
     final isFile = message.type == ChatMsgType.file;
+    final isImage = message.type == ChatMsgType.image;
     final isMediaFace = message.type == ChatMsgType.image ||
         message.type == ChatMsgType.face;
 
@@ -2964,6 +2973,13 @@ class _MessageItem extends StatelessWidget {
 
     // 菜单项（文本色/点击回调）
     final items = <(IconData, String, Color?, VoidCallback)>[
+      if (isImage)
+        (
+          Icons.save_outlined,
+          '保存图片',
+          null,
+          () => _saveImage(context),
+        ),
       if (forwardable)
         (Icons.format_quote, '引用', null, () => onQuote(message)),
       if (message.type == ChatMsgType.text)
@@ -3012,6 +3028,44 @@ class _MessageItem extends StatelessWidget {
     ];
 
     if (items.isEmpty) return;
+
+    // 桌面端右键：菜单出现在鼠标处（showMenu 原生上下文菜单）；
+    // 移动端长按 / 桌面长按：保持底部弹层
+    if (isDesktopLayout(context) && menuPosition != null) {
+      final overlay =
+          Overlay.of(context).context.findRenderObject() as RenderBox;
+      final relative = RelativeRect.fromRect(
+        Rect.fromPoints(
+          overlay.globalToLocal(menuPosition),
+          overlay.globalToLocal(menuPosition),
+        ),
+        Offset.zero & overlay.size,
+      );
+      showMenu<void>(
+        context: context,
+        position: relative,
+        color: context.colors.card,
+        menuPadding: EdgeInsets.zero,
+        popUpAnimationStyle: const AnimationStyle(duration: Duration.zero),
+        items: [
+          for (final (icon, label, color, action) in items)
+            PopupMenuItem<void>(
+              height: 44,
+              onTap: action,
+              child: Row(
+                children: [
+                  Icon(icon, size: 20,
+                      color: color ?? context.colors.muted),
+                  const SizedBox(width: 10),
+                  Text(label,
+                      style: TextStyle(fontSize: 14, color: color)),
+                ],
+              ),
+            ),
+        ],
+      );
+      return;
+    }
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: context.colors.card,
@@ -3042,6 +3096,56 @@ class _MessageItem extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  /// 保存图片消息（复用顶层 [_saveImageToGalleryOrDisk]）。
+  Future<void> _saveImage(BuildContext context) =>
+      _saveImageToGalleryOrDisk(
+          context, normalizeFaceUrl(message.imagePayload?.url ?? ''));
+}
+
+/// 保存图片到本地：
+/// - 移动端：下载后存入系统相册（image_gallery_saver）；
+/// - 桌面端：存到「文稿/IM 图片」目录并 toast 提示完整路径。
+/// 供气泡菜单与全屏预览页共用。
+Future<void> _saveImageToGalleryOrDisk(BuildContext context, String url) async {
+  if (url.isEmpty) return;
+  final messenger = ScaffoldMessenger.of(context);
+  void toast(String text) =>
+      messenger..hideCurrentSnackBar()..showSnackBar(SnackBar(content: Text(text)));
+  // 桌面/移动分流需在 await 前取（避免 async gap 后用 context）
+  final desktop = isDesktopLayout(context);
+  try {
+    final res = await Dio().get<List<int>>(
+      url,
+      options: Options(responseType: ResponseType.bytes),
+    );
+    final bytes = Uint8List.fromList(res.data ?? const []);
+    if (bytes.isEmpty) throw '图片下载失败';
+    final name = 'IM_${DateTime.now().millisecondsSinceEpoch}.jpg';
+    if (desktop) {
+      // 桌面端：原生「另存为」对话框，用户自选保存位置；
+      // file_picker 8.3.7 的 macOS saveFile 只返回路径不写文件，需自己落盘
+      final path = await FilePicker.platform.saveFile(
+        fileName: name,
+        type: FileType.image,
+      );
+      if (path == null) return; // 用户取消
+      await File(path).writeAsBytes(bytes);
+      toast('图片已保存到 $path');
+    } else {
+      final result = await ImageGallerySaver.saveImage(
+        bytes,
+        quality: 100,
+        name: name,
+      );
+      final ok = result is Map && result['isSuccess'] == true;
+      toast(ok
+          ? '已保存到相册'
+          : '保存失败：${result is Map ? (result['errorMessage'] ?? '') : ''}');
+    }
+  } catch (e) {
+    toast('保存失败：$e');
   }
 }
 
@@ -3579,14 +3683,25 @@ class _ImageViewerPage extends StatelessWidget {
               ),
             ),
           ),
-          // 顶部关闭按钮（状态栏安全区）
+          // 顶部操作按钮：保存 + 关闭（状态栏安全区）
           Positioned(
             top: 0,
             right: 0,
             child: SafeArea(
-              child: IconButton(
-                icon: const Icon(Icons.close, color: Colors.white, size: 26),
-                onPressed: () => Navigator.of(context).pop(),
+              child: Row(
+                children: [
+                  IconButton(
+                    tooltip: '保存图片',
+                    icon: const Icon(Icons.save_outlined,
+                        color: Colors.white, size: 24),
+                    onPressed: () =>
+                        _saveImageToGalleryOrDisk(context, url),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white, size: 26),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                ],
               ),
             ),
           ),
