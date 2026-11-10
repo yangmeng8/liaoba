@@ -19,13 +19,15 @@ Future<void> showPanelPage(BuildContext context, Widget page) async {
 ///   子页面（账户安全/改密码/意见反馈/关于等）在弹框内切换，不覆盖整个 App；
 /// - 弹框内栈只剩首页时再「返回」→ 自动关闭整个弹框；
 /// - 页面内部 showDialog 默认走根 Navigator，确认框仍居中覆盖全屏。
-Future<void> showSettingsDialog(
+/// - 泛型 [T]：页面 pop 时携带的结果类型（如成员多选 List<int>），
+///   无结果场景保持 void 调用不变。
+Future<T?> showSettingsDialog<T>(
   BuildContext context, {
   required Widget page,
   double width = 440,
   double maxHeight = 620,
 }) {
-  return showDialog<void>(
+  return showDialog<T>(
     context: context,
     builder: (dialogCtx) => Dialog(
       backgroundColor: Colors.transparent,
@@ -36,10 +38,11 @@ Future<void> showSettingsDialog(
           child: Navigator(
             initialRoute: '/',
             observers: [
-              _AutoCloseObserver(() {
-                // 弹框内最后一页被 pop：关闭弹框本身
+              _AutoCloseObserver((route) {
+                // 弹框内最后一页被 pop：把页面携带的结果转发给根弹框后关闭
                 final root = Navigator.of(dialogCtx);
-                if (root.canPop()) root.pop();
+                if (!root.canPop()) return;
+                route.popped.then((result) => root.pop(result));
               }),
             ],
             // 首页路由；后续页面由页面内部 MaterialPageRoute.push 直传，不经过这里
@@ -54,14 +57,15 @@ Future<void> showSettingsDialog(
   );
 }
 
-/// 弹框内导航观察者：栈被 pop 到空（最后一页返回）时回调关闭弹框。
+/// 弹框内导航观察者：栈被 pop 到空（最后一页返回）时回调关闭弹框
+/// （回调参数为被 pop 的首页路由，用于转发其携带的返回值）。
 class _AutoCloseObserver extends NavigatorObserver {
   _AutoCloseObserver(this.onEmpty);
 
-  final VoidCallback onEmpty;
+  final void Function(Route<dynamic> route) onEmpty;
 
   @override
   void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
-    if (previousRoute == null) onEmpty();
+    if (previousRoute == null) onEmpty(route);
   }
 }

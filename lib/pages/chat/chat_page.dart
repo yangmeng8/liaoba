@@ -408,11 +408,10 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     if (_isPrivate) {
       _openProfilePage(widget.targetId);
     } else if (_isGroup) {
-      // 群设置页保持整页打开（内容较多）
-      await Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => GroupSettingsPage(groupId: widget.targetId),
-        ),
+      // 群设置：桌面端居中弹框小窗口，移动端整页
+      await showPanelPage(
+        context,
+        GroupSettingsPage(groupId: widget.targetId),
       );
     } else {
       return;
@@ -1242,7 +1241,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       );
       return;
     }
-    // 群聊：选择被邀请成员
+    // 群聊：选择被邀请成员（桌面端居中弹框，移动端底部弹层）
     final myUserId = AuthManager.instance.userId ?? 0;
     final members = _groupMembers.values
         .where((m) => m.userId != myUserId)
@@ -1251,12 +1250,20 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       _showSnack('暂无可邀请的群成员');
       return;
     }
-    final selected = await showModalBottomSheet<List<int>>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => _CallMemberSheet(members: members),
-    );
+    final List<int>? selected;
+    if (isDesktopLayout(context)) {
+      selected = await showSettingsDialog<List<int>>(
+        context,
+        page: _CallMemberSheet(members: members),
+      );
+    } else {
+      selected = await showModalBottomSheet<List<int>>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (_) => _CallMemberSheet(members: members),
+      );
+    }
     if (selected == null || selected.isEmpty) return;
     await RtcController.instance.start(
       conversationType: 2,
@@ -2718,10 +2725,9 @@ class _MessageItem extends StatelessWidget {
       // 名片气泡：点击群名片→群设置页（只读兜底），个人名片→用户资料页
       content = GestureDetector(
         onTap: card.isGroupCard
-            ? () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => GroupSettingsPage(groupId: card.targetId),
-                  ),
+            ? () => showPanelPage(
+                  context,
+                  GroupSettingsPage(groupId: card.targetId),
                 )
             : () => onOpenProfile(card.targetId),
         child: _CardBubbleBody(payload: card),
@@ -4556,7 +4562,9 @@ class _CallMemberSheetState extends State<_CallMemberSheet> {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    final height = MediaQuery.of(context).size.height * 0.6;
+    // 移动端：屏高 60% 的底部弹层；桌面端：弹框窗口内固定高度
+    final height = isDesktopLayout(context) ? 420.0
+        : MediaQuery.of(context).size.height * 0.6;
     return Container(
       height: height,
       decoration: BoxDecoration(
