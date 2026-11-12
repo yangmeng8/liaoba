@@ -87,6 +87,7 @@ flutter:
     - assets/sounds/notify.wav
     - assets/sounds/ringtone_reflection.wav
     - assets/sounds/ringback.wav
+    - assets/sounds/hangup_beep.wav
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

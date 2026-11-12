@@ -5,6 +5,7 @@ import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show MethodCall, MethodChannel;
 import 'package:dio/dio.dart' show Options;
+import 'package:just_audio/just_audio.dart';
 
 import '../models/im_ws_frame.dart';
 import '../pages/call/call_page.dart';
@@ -140,6 +141,9 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
 
   /// 通话结束原因文案（退出前展示）。
   String endToast = '';
+
+  /// 挂断提示音播放器（通话中被远端挂断时播一声「嘟」）。
+  final AudioPlayer _hangupBeepPlayer = AudioPlayer();
 
   /// 全局导航 Key（main 注入；来电拉起通话页用）。
   GlobalKey<NavigatorState>? navigatorKey;
@@ -320,7 +324,20 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
     final myUserId = AuthManager.instance.userId ?? 0;
     final room = asString(payload['room']);
     final userId = asInt(payload['userId']);
-    if (room.isEmpty || userId == myUserId || userId <= 0) return;
+    if (room.isEmpty || userId <= 0) return;
+    // 同账号多端被叫：本账号另一台设备接听了同一房间来电 →
+    // 本端来电页自动收尾（不调服务端接口，通话已由对端接起）
+    if (userId == myUserId) {
+      if (_stage == RtcStage.incoming && incomingSignal?.room == room) {
+        DiagLog.log('[RTC] 本账号其他设备已接听 → 收尾本端来电页: room=$room');
+        finishCall(localEnd: false, toast: '已在其他设备接听');
+      } else {
+        // 诊断：收到本账号的进房信令但没触发收尾（阶段/房间不匹配）
+        DiagLog.log('[RTC] 收到本账号进房信令但未匹配来电页'
+            '（stage=$_stage, 信令room=$room, 来电room=${incomingSignal?.room}）');
+      }
+      return;
+    }
     if (_stage == RtcStage.inviting && call?.room == room) {
       _stopRingback(); // 对方接听：停回铃音
       _enterRunning(autoConnect: true);
@@ -502,6 +519,9 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
         }
         incomingSignal = signal;
         _stage = RtcStage.incoming;
+        // 多端被叫兜底：1602 信令可能只推到接听端，本端每 3 秒轮询
+        // 一次通话状态，发现其他端已接通/通话已结束即收尾来电页
+        _startIncomingStatePolling();
         if (ringtone) {
           _startRingtone(); // 被叫：来电页弹出即振铃（前台无通知声，App 内补）
         } else {
@@ -709,6 +729,8 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
     _stopRingtone(); // 结束通话：停振铃音（拒接/超时/取消，幂等）
     _pollAnswerTimer?.cancel(); // 结束通话：停兜底轮询
     _pollAnswerTimer = null;
+    _incomingPollTimer?.cancel(); // 结束来电：停多端接听轮询
+    _incomingPollTimer = null;
     // iOS：同步结束 CallKit 系统来电界面（对方挂断/超时/取消）
     if (Platform.isIOS) {
       unawaited(_callkitChannel.invokeMethod('endCall').catchError((Object _) {}));
@@ -719,6 +741,10 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
       endToast = '';
     }
     await liveKit.disconnect();
+    // 通话中被远端挂断（对方挂机/掉线）：播一声「嘟」提示对方已挂断
+    if (!localEnd && _stage == RtcStage.running) {
+      _playHangupBeep();
+    }
     _stage = RtcStage.idle;
     call = null;
     incomingSignal = null;
@@ -838,9 +864,65 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  /// 挂断提示音（425Hz 一声「嘟」）：通话中对方挂断的感知提示。
+  /// 播放时机在 liveKit.disconnect 之后（音频会话已释放，不与通话音频
+  /// 抢占）；来电阶段对方取消不播（振铃停止已足够感知）。
+  void _playHangupBeep() {
+    unawaited(() async {
+      try {
+        await _hangupBeepPlayer.setAsset('assets/sounds/hangup_beep.wav');
+        await _hangupBeepPlayer.play();
+      } catch (e) {
+        DiagLog.log('[RTC] 播放挂断提示音失败: $e');
+      }
+    }());
+  }
+
   /// 主叫接通感知兜底轮询：1602 信令丢失（如被叫锁屏 CallKit 接听场景）
   /// 时，每 3 秒查一次通话状态，发现已接听（status=20）直接进通话。
   Timer? _pollAnswerTimer;
+
+  /// 被叫多端接听兜底轮询：来电页振铃期间每 3 秒查一次通话状态，
+  /// 同账号其他端接通（status=20）→ 本端收尾「已在其他设备接听」；
+  /// 通话已结束（status=30）→ 收尾。joinCall 未接听时调用无副作用
+  /// （与主叫 _pollAnswerStatus 同一接口的同一用法）。
+  Timer? _incomingPollTimer;
+
+  void _startIncomingStatePolling() {
+    _incomingPollTimer?.cancel();
+    _incomingPollTimer = Timer.periodic(
+        const Duration(seconds: 3), (_) => unawaited(_pollIncomingState()));
+  }
+
+  Future<void> _pollIncomingState() async {
+    final signal = incomingSignal;
+    final room = signal?.room;
+    // 仅群聊可轮询：join 接口后端只支持群通话（私聊报
+    // 1040900007「群聊通话必须指定群编号」）；私聊多端感知依赖
+    // 1602 信令广播（需后端支持）。
+    if (room == null ||
+        room.isEmpty ||
+        _stage != RtcStage.incoming ||
+        signal?.conversationType != 2) {
+      _incomingPollTimer?.cancel();
+      _incomingPollTimer = null;
+      return;
+    }
+    try {
+      final data = await RtcApi.joinCall(room: room);
+      // 竞态保护：轮询返回时本端可能已自己接听（running）或已收尾
+      if (_stage != RtcStage.incoming || incomingSignal?.room != room) return;
+      if (data.status == 20) {
+        DiagLog.log('[RTC] 轮询发现其他设备已接听 → 收尾本端来电页: room=$room');
+        finishCall(localEnd: false, toast: '已在其他设备接听');
+      } else if (data.status == 30) {
+        DiagLog.log('[RTC] 轮询发现通话已结束 → 收尾本端来电页: room=$room');
+        finishCall(localEnd: false, toast: '通话已结束');
+      }
+    } catch (_) {
+      // 查询失败（私聊接口限制/网络抖动）：等下一轮或 1602/1611 信令
+    }
+  }
 
   Future<void> _pollAnswerStatus() async {
     final room = call?.room;
