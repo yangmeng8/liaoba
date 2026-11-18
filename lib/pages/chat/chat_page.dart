@@ -1512,13 +1512,34 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   }
 
   /// 全屏预览图片（对齐 H5 uni.previewImage：缩放/双击）。
+  /// 左右滑动切换本会话其他图片；下滑收起（见 _ImageViewerPage）。
   void _previewImage(String url) {
     final full = _staticUrl(url);
     if (full.isEmpty) return;
+    // 收集会话内已完成上传的图片消息（旧→新），当前图定位初始页
+    final urls = <String>[];
+    var initial = -1;
+    for (final m in _messages.reversed) {
+      if (m.type != ChatMsgType.image || m.imagePayload == null) continue;
+      if (m.progress != null) continue; // 上传中不可预览
+      final u = _staticUrl(m.imagePayload!.url);
+      if (u.isEmpty || _isLocalPath(u)) continue;
+      if (u == full) initial = urls.length;
+      urls.add(u);
+    }
+    if (initial < 0) {
+      // 当前图不在图片消息列表（如图片类型的文件消息）：追加为末页
+      urls.add(full);
+      initial = urls.length - 1;
+    }
     Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        fullscreenDialog: true,
-        builder: (_) => _ImageViewerPage(url: full),
+      PageRouteBuilder<void>(
+        opaque: false, // 下滑时背景渐透明，透出聊天页（微信同款）
+        transitionDuration: const Duration(milliseconds: 180),
+        pageBuilder: (_, __, ___) =>
+            _ImageViewerPage(urls: urls, initialIndex: initial),
+        transitionsBuilder: (_, anim, __, child) =>
+            FadeTransition(opacity: anim, child: child),
       ),
     );
   }
@@ -3822,33 +3843,201 @@ Widget _buildProgressOverlay(double progress) {
   );
 }
 
-/// 图片全屏预览页（对齐 H5 uni.previewImage：双指缩放/双击放大/拖动）。
-class _ImageViewerPage extends StatelessWidget {
-  final String url;
+/// 图片全屏预览页（对齐微信图片查看手势）：
+/// - 左右滑动切换本会话其他图片（PageView + PhotoView 共存）
+/// - 下滑收起：未放大或已到边界时，垂直拖动图片跟手位移、背景渐透明，
+///   松手超过位移/速度阈值即关闭，否则弹回（PhotoViewGestureDetectorScope
+///   让 photo_view 在图片到达边界时让出垂直手势）
+/// - 双击放大/双指缩放（PhotoView 内置）
+class _ImageViewerPage extends StatefulWidget {
+  final List<String> urls;
+  final int initialIndex;
 
-  const _ImageViewerPage({required this.url});
+  const _ImageViewerPage({required this.urls, this.initialIndex = 0});
+
+  @override
+  State<_ImageViewerPage> createState() => _ImageViewerPageState();
+}
+
+class _ImageViewerPageState extends State<_ImageViewerPage> {
+  late final PageController _pageCtrl;
+  late int _index;
+
+  /// 下滑位移（跟手）：> 0 向下拖动中
+  double _dragDy = 0;
+
+  /// 滚轮切页去抖时间点（触摸板惯性滚动合并为一次切页）。
+  DateTime? _lastWheelAt;
+
+  /// 每页缩放状态控制器缓存（桌面端双击放大/复位用；翻页时旧页复位）。
+  final Map<int, PhotoViewScaleStateController> _scaleCtrls = {};
+
+  /// 桌面端：当前页是否处于放大状态。未放大时禁用 photo_view 手势，
+  /// 鼠标拖拽整个屏幕区域直接切页/收起（避免手势竞技场难以触发）；
+  /// 放大后恢复 photo_view 手势（平移看局部，拖到边界让出收起）。
+  bool _zoomed = false;
+
+  PhotoViewScaleStateController _scaleCtrlOf(int i) =>
+      _scaleCtrls.putIfAbsent(i, () => PhotoViewScaleStateController());
+
+  /// 桌面端双击：未放大 → 放大；已放大 → 复位（photo_view 手势禁用时
+  /// 内置双击不可用，此处经 scaleStateController 直接切换）。
+  void _onDesktopDoubleTap() {
+    final ctrl = _scaleCtrls[_index];
+    if (ctrl == null) return;
+    ctrl.scaleState = _zoomed
+        ? PhotoViewScaleState.initial
+        : PhotoViewScaleState.zoomedIn;
+  }
+
+  /// 切页（键盘/滚轮共用）：范围钳制 + 平滑动画。
+  void _goToPage(int i) {
+    final target = i.clamp(0, widget.urls.length - 1);
+    if (target == _index) return;
+    _pageCtrl.animateToPage(
+      target,
+      duration: const Duration(milliseconds: 200),
+      curve: Curves.easeOut,
+    );
+  }
+
+  /// 桌面端键盘：←/→ 切上一张/下一张，ESC 关闭（微信 PC 同款）。
+  KeyEventResult _onDesktopKey(FocusNode node, KeyEvent event) {
+    if (event is KeyUpEvent || event is KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    final key = event.logicalKey;
+    if (key == LogicalKeyboardKey.arrowLeft) {
+      _goToPage(_index - 1);
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.arrowRight) {
+      _goToPage(_index + 1);
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.escape) {
+      Navigator.of(context).pop();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  /// 桌面端滚轮：上滚上一张/下滚下一张（触摸板惯性 120ms 去抖）。
+  void _onWheel(PointerScrollEvent e) {
+    final now = DateTime.now();
+    final last = _lastWheelAt;
+    if (last != null && now.difference(last).inMilliseconds < 120) return;
+    _lastWheelAt = now;
+    _goToPage(e.delta.dy > 0 ? _index + 1 : _index - 1);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _index = widget.initialIndex.clamp(0, widget.urls.length - 1);
+    _pageCtrl = PageController(initialPage: _index);
+  }
+
+  @override
+  void dispose() {
+    _pageCtrl.dispose();
+    super.dispose();
+  }
+
+  void _onVerticalDragUpdate(DragUpdateDetails d) {
+    final dy = _dragDy + d.delta.dy;
+    // 只跟手向下（向上拖交给图片 pan/边界逻辑）
+    setState(() => _dragDy = dy < 0 ? 0 : dy);
+  }
+
+  void _onVerticalDragEnd(DragEndDetails d) {
+    // 位移或下滑速度超阈值 → 收起；否则弹回
+    if (_dragDy > 120 || (d.primaryVelocity ?? 0) > 700) {
+      Navigator.of(context).pop();
+      return;
+    }
+    if (_dragDy != 0) setState(() => _dragDy = 0);
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Stack(
-        children: [
-          Positioned.fill(
-            child: PhotoView(
-              imageProvider: NetworkImage(url),
-              backgroundDecoration: const BoxDecoration(color: Colors.black),
-              minScale: PhotoViewComputedScale.contained,
-              maxScale: PhotoViewComputedScale.covered * 4,
-              loadingBuilder: (_, _) => const Center(
-                child: CircularProgressIndicator(color: AppColors.lime),
-              ),
-              errorBuilder: (_, _, _) => const Center(
-                child: Text('图片加载失败', style: TextStyle(color: Colors.white70)),
+    // 下滑时背景渐透明（路由 opaque:false 透出聊天页）
+    final bgAlpha = (1 - _dragDy / 480).clamp(0.1, 1.0);
+    final desktop = isDesktopLayout(context);
+    Widget pages = GestureDetector(
+      // 整屏命中：图片周围黑边区域也可拖拽切页/收起
+      behavior: HitTestBehavior.opaque,
+      onDoubleTap: desktop ? _onDesktopDoubleTap : null,
+      onVerticalDragUpdate: _onVerticalDragUpdate,
+      onVerticalDragEnd: _onVerticalDragEnd,
+      child: Transform.translate(
+        offset: Offset(0, _dragDy),
+        child: ScrollConfiguration(
+          // 桌面端允许鼠标按住拖拽切页/收起（默认 ScrollBehavior 不含 mouse）
+          behavior: ScrollConfiguration.of(context).copyWith(
+            dragDevices: PointerDeviceKind.values.toSet(),
+          ),
+          child: PageView.builder(
+            controller: _pageCtrl,
+            itemCount: widget.urls.length,
+            onPageChanged: (i) {
+              // 切页：旧页缩放复位，新页视为未放大
+              _scaleCtrls[_index]?.scaleState = PhotoViewScaleState.initial;
+              setState(() {
+                _index = i;
+                _zoomed = false;
+              });
+            },
+            itemBuilder: (_, i) => PhotoViewGestureDetectorScope(
+              axis: Axis.vertical,
+              child: PhotoView(
+                imageProvider: NetworkImage(widget.urls[i]),
+                scaleStateController: _scaleCtrlOf(i),
+                // 桌面端未放大时 photo_view 手势整体禁用：鼠标拖拽
+                // 不再与其竞技场博弈，整屏自由切页/收起；放大后恢复
+                disableGestures: desktop && !_zoomed,
+                scaleStateChangedCallback: (state) {
+                  if (!desktop || i != _index) return;
+                  final zoomed = state != PhotoViewScaleState.initial &&
+                      state != PhotoViewScaleState.zoomedOut;
+                  if (zoomed != _zoomed) setState(() => _zoomed = zoomed);
+                },
+                backgroundDecoration:
+                    const BoxDecoration(color: Colors.transparent),
+                minScale: PhotoViewComputedScale.contained,
+                maxScale: PhotoViewComputedScale.covered * 4,
+                loadingBuilder: (_, _) => const Center(
+                  child: CircularProgressIndicator(color: AppColors.lime),
+                ),
+                errorBuilder: (_, _, _) => const Center(
+                  child: Text('图片加载失败',
+                      style: TextStyle(color: Colors.white70)),
+                ),
               ),
             ),
           ),
-          // 顶部操作按钮：保存 + 关闭（状态栏安全区）
+        ),
+      ),
+    );
+    // 桌面端附加：滚轮切页 + ←/→ 键切页/ESC 关闭
+    if (desktop) {
+      pages = Listener(
+        onPointerSignal: (e) {
+          if (e is PointerScrollEvent) _onWheel(e);
+        },
+        child: Focus(
+          autofocus: true,
+          onKeyEvent: _onDesktopKey,
+          child: pages,
+        ),
+      );
+    }
+    return Scaffold(
+      backgroundColor: Colors.black.withOpacity(bgAlpha),
+      body: Stack(
+        children: [
+          Positioned.fill(child: pages),
+          // 顶部操作按钮：保存当前页 + 关闭（状态栏安全区）
           Positioned(
             top: 0,
             right: 0,
@@ -3862,7 +4051,8 @@ class _ImageViewerPage extends StatelessWidget {
                       color: Colors.white,
                       size: 24,
                     ),
-                    onPressed: () => _saveImageToGalleryOrDisk(context, url),
+                    onPressed: () =>
+                        _saveImageToGalleryOrDisk(context, widget.urls[_index]),
                   ),
                   IconButton(
                     icon: const Icon(
