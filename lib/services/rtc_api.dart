@@ -45,10 +45,21 @@ class RtcApi {
   }
 
   /// 接听通话（返回带本人 token 的连接数据）。
-  static Future<RtcCallData> acceptCall({required String room}) async {
+  /// [deviceId]/[deviceType]：接听设备标识（多端同振时后端广播 1602，
+  /// 各端对比 deviceId 判断是否本设备接听，其他设备自动收尾来电页）。
+  /// deviceType 为整型枚举：1-安卓 2-苹果 3-Win 4-Mac 5-Web。
+  static Future<RtcCallData> acceptCall({
+    required String room,
+    required String deviceId,
+    required int deviceType,
+  }) async {
     final resp = await ApiClient.dio.post(
       '/app-api/im/rtc/accept',
-      queryParameters: {'room': room},
+      queryParameters: {
+        'room': room,
+        'deviceId': deviceId,
+        'deviceType': deviceType,
+      },
     );
     return RtcCallData.fromJson(ApiClient.unwrap(resp));
   }

@@ -11,6 +11,7 @@ import '../models/im_ws_frame.dart';
 import '../pages/call/call_page.dart';
 import '../services/api_client.dart';
 import '../services/auth_manager.dart';
+import '../services/device_identity.dart';
 import '../services/im_websocket.dart';
 import '../services/rtc_api.dart';
 import '../stores/conversation_store.dart';
@@ -326,11 +327,23 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
     final userId = asInt(payload['userId']);
     if (room.isEmpty || userId <= 0) return;
     // 同账号多端被叫：本账号另一台设备接听了同一房间来电 →
-    // 本端来电页自动收尾（不调服务端接口，通话已由对端接起）
+    // 本端来电页自动收尾（不调服务端接口，通话已由对端接起）。
+    // 接听端上报了 deviceId（1602 广播携带）：不同即其他设备接听
     if (userId == myUserId) {
+      final theirDeviceId = asString(payload['deviceId']);
+      final myDeviceId = DeviceIdentity.cachedDeviceId;
+      // 旧后端（无 deviceId）兜底：同 userId 一律视为其他设备接听
       if (_stage == RtcStage.incoming && incomingSignal?.room == room) {
-        DiagLog.log('[RTC] 本账号其他设备已接听 → 收尾本端来电页: room=$room');
-        finishCall(localEnd: false, toast: '已在其他设备接听');
+        if (theirDeviceId.isEmpty ||
+            myDeviceId == null ||
+            theirDeviceId != myDeviceId) {
+          DiagLog.log('[RTC] 其他设备已接听 → 收尾本端来电页: room=$room, '
+              '接听设备=$theirDeviceId, 本设备=$myDeviceId');
+          finishCall(localEnd: false, toast: '已在其他设备接听');
+        } else {
+          // 本设备接听的广播回显（被叫 accept 后自己也会收到）：忽略
+          DiagLog.log('[RTC] 本设备接听广播回显，忽略: room=$room');
+        }
       } else {
         // 诊断：收到本账号的进房信令但没触发收尾（阶段/房间不匹配）
         DiagLog.log('[RTC] 收到本账号进房信令但未匹配来电页'
@@ -579,7 +592,11 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
       DiagLog.log('[RTC] 开始接听 room=${signal.room}（stage=$_stage，'
           '第 $attempt/$attempts 次）');
       try {
-        final data = await RtcApi.acceptCall(room: signal.room);
+        final data = await RtcApi.acceptCall(
+          room: signal.room,
+          deviceId: await DeviceIdentity.deviceId(),
+          deviceType: DeviceIdentity.deviceType(),
+        );
         call = data;
         DiagLog.log('[RTC] 接听接口成功 room=${data.room}，'
             'livekitUrl=${data.livekitUrl}，token长度=${data.token.length}，'
