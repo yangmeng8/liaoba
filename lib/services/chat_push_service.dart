@@ -150,6 +150,13 @@ class ChatPushService with WidgetsBindingObserver {
       debugPrint('[ChatPush] 检查登录态后推送处理已关闭，忽略收到的消息');
       return;
     }
+    // 1620「其他设备已接听」推送（同账号多端同振、另一台接听后的挂断通知）：
+    // 安卓后台/被杀时 WS 已断线收不到 WS 广播，靠这条推送收尾来电页
+    // （iOS 锁屏 CallKit 场景在原生 AppDelegate 层直接处理，不走这里）。
+    if (_isOtherDeviceAcceptedPush(rawMessage)) {
+      RtcController.instance.handleOtherDeviceAcceptedFromPush(rawMessage);
+      return;
+    }
     // 推送规则：
     // 1. 通知消息：后台由系统展示，前台 Android 转 App 内横幅，不补发本地通知；
     // 2. 自定义消息：前台可展示 App 内横幅；
@@ -220,6 +227,17 @@ class ChatPushService with WidgetsBindingObserver {
     if (_pushHandlingEnabled) {
       await _showLocalNotification(payload);
     }
+  }
+
+  /// 1620「其他设备已接听」推送识别：后端在 accept 时随 VoIP 推送下发的
+  /// type=1620 + deviceId + deviceType（安卓可能平铺或收在 extras 层）。
+  bool _isOtherDeviceAcceptedPush(Map<String, dynamic> raw) {
+    for (final dynamic layer in <dynamic>[raw, raw['extras']]) {
+      if (layer is! Map) continue;
+      final dynamic type = layer['type'];
+      if (type is String && type == '1620') return true;
+    }
+    return false;
   }
 
   void handleNotificationOpened(Map<String, dynamic> rawMessage) {

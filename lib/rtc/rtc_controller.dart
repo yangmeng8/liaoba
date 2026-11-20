@@ -403,6 +403,35 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
     finishCall(localEnd: false, toast: '已在其他设备接听');
   }
 
+  /// 推送链路的 1620（其他设备已接听；安卓后台/被杀 WS 断线时的收尾通道）。
+  /// 推送 payload 只有 type/deviceId/deviceType（无 room/acceptedUserId），
+  /// 有来电页即收尾（同账号同一时刻只有一通待接来电，无房间匹配必要）。
+  void handleOtherDeviceAcceptedFromPush(Map<String, dynamic> raw) {
+    // deviceId 平铺或在 extras 层（极光安卓消息结构差异，两层都找）
+    String acceptedDeviceId = asString(raw['deviceId']);
+    if (acceptedDeviceId.isEmpty) {
+      final extras = raw['extras'];
+      if (extras is Map) acceptedDeviceId = asString(extras['deviceId']);
+    }
+    final myDeviceId = DeviceIdentity.cachedDeviceId;
+    DiagLog.log('[RTC] 推送1620 其他设备接听: 接听设备=$acceptedDeviceId, '
+        '本设备=$myDeviceId');
+    // 本设备接听的推送回显（理论上不会推给接听端，防御处理）
+    if (acceptedDeviceId.isNotEmpty && acceptedDeviceId == myDeviceId) {
+      DiagLog.log('[RTC] 推送1620 为本设备接听回显，忽略');
+      return;
+    }
+    if (_stage != RtcStage.incoming) {
+      DiagLog.log('[RTC] 推送1620 无来电页（stage=$_stage），忽略');
+      return;
+    }
+    final room = incomingSignal?.room ?? '';
+    if (room.isNotEmpty) {
+      unawaited(RtcCallMarks.markOtherDeviceAccepted(room));
+    }
+    finishCall(localEnd: false, toast: '已在其他设备接听');
+  }
+
   /// 参与者离房（LiveKit webhook participant_left 触发）：
   /// 私聊 RUNNING 时对方离房 → 通话结束（对方挂断后 endSession 的
   /// RTC_CALL_END 消息与本信令双保险，finishCall 幂等只生效一次）。

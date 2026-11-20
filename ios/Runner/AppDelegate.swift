@@ -101,21 +101,7 @@ import UserNotifications
         switch call.method {
         case "endCall":
           // Flutter 侧通话结束（对方挂断/超时/取消）→ 同步结束 CallKit 界面
-          // 通话结束同时释放通话音频会话，否则 .playAndRecord 会一直占用着
-          // （其它 App 的音乐被压低、麦克风指示灯不灭）。
-          self._deactivateCallAudioSession(reason: "endCall")
-          if let uuid = self.currentCallUuid {
-            // iOS 26 SDK：reportCallEnded 改名 reportCall(with:endedAt:reason:)
-            self.callProvider?.reportCall(
-              with: uuid,
-              endedAt: nil,
-              reason: CXCallEndedReason.remoteEnded
-            )
-          }
-          self.currentCallUuid = nil
-          self.currentCallPayload = [:]
-          self._clearPersistedCallPayload()
-          self._playRingback(false)
+          self._endSystemCall(reasonLog: "endCall")
           result(nil)
         case "startRingback":
           self._playRingback(true)
@@ -923,6 +909,30 @@ extension AppDelegate: PKPushRegistryDelegate {
     imLog("[CallKit] 收到 VoIP 推送: \(userInfo)")
     // 回执给极光（送达统计/日志），失败不影响下面的 CallKit 上报
     JPUSHService.handleVoipNotification(userInfo)
+    // 1620「其他设备已接听」（后端在 accept 时同时下发的 VoIP 推送）：
+    // 同账号多端同振、其中一台接听后，其余设备靠这条推送结束本机 CallKit 响铃
+    // （锁屏/后台时 WS 已断线收不到 1620 广播）。对比 deviceId：
+    // 非本设备 → 结束系统来电界面；本设备（接听端自己收到）→ 忽略。
+    // 该推送不弹来电界面（不是来电），直接 completion 放行。
+    if (userInfo["type"] as? String ?? "") == "1620" {
+      let pushDeviceId = userInfo["deviceId"] as? String ?? ""
+      // Flutter shared_preferences 在 iOS 落在 NSUserDefaults（key 带 flutter. 前缀）
+      let myDeviceId = UserDefaults.standard.string(forKey: "flutter.im_device_id") ?? ""
+      imLog("[CallKit] 收到 1620 其他设备接听: pushDeviceId=\(pushDeviceId) "
+        + "myDeviceId=\(myDeviceId)")
+      let isMine = !pushDeviceId.isEmpty && pushDeviceId == myDeviceId
+      if isMine {
+        imLog("[CallKit] 1620 为本设备接听回显，忽略")
+      } else if UserDefaults.standard.bool(forKey: pendingCallAnsweredKey) {
+        // 本端正在通话中（已接听）：这条 1620 属于另一通电话在其他设备
+        // 被接听的广播，不影响当前通话，忽略以免误挂正在进行的通话
+        imLog("[CallKit] 本端通话进行中，忽略其他通话的 1620")
+      } else {
+        _endSystemCall(reasonLog: "otherDeviceAccepted(1620)")
+      }
+      completion()
+      return
+    }
     // 未登录（已退出登录）不接收 VoIP 推送：与普通推送保持一致——退出登录后
     // 原生消息处理开关（isPushEnabled）为 false，通知与点击都直接忽略；来电同理，
     // 否则锁屏会弹出一个「点接听也没法通话」的系统来电界面。
@@ -1077,6 +1087,25 @@ extension AppDelegate: CXProviderDelegate {
       imLog("[CallKit] 通话音频会话 setActive(true) 被拒(reason=\(reason)): "
         + "\(error.localizedDescription)（等待系统 didActivate）")
     }
+  }
+
+  /// 结束 CallKit 系统来电界面（对方挂断/超时/取消/其他设备接听等远端结束）。
+  /// 通话结束同时释放通话音频会话，否则 .playAndRecord 会一直占用着
+  /// （其它 App 的音乐被压低、麦克风指示灯不灭）。
+  private func _endSystemCall(reasonLog: String) {
+    _deactivateCallAudioSession(reason: reasonLog)
+    if let uuid = currentCallUuid {
+      // iOS 26 SDK：reportCallEnded 改名 reportCall(with:endedAt:reason:)
+      callProvider?.reportCall(
+        with: uuid,
+        endedAt: nil,
+        reason: CXCallEndedReason.remoteEnded
+      )
+    }
+    currentCallUuid = nil
+    currentCallPayload = [:]
+    _clearPersistedCallPayload()
+    _playRingback(false)
   }
 
   /// 释放通话音频会话（通话结束/被拒接时）。

@@ -22,6 +22,7 @@ import 'services/desktop_notify_service.dart';
 import 'services/im_websocket.dart';
 import 'services/jpush_registration_upload.dart';
 import 'services/push_service.dart';
+import 'services/device_identity.dart';
 import 'services/rtc_call_marks.dart';
 import 'services/version_service.dart';
 import 'shared/app_colors.dart';
@@ -289,6 +290,9 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     PresenceStore.instance.attach();
     // 通话标记（其他设备接听的 room 集合，1611 消息文案替换用）
     unawaited(RtcCallMarks.load());
+    // 设备唯一标识预热：尽早生成并持久化（iOS 原生 1620 推送要读
+    // NSUserDefaults 里的 flutter.im_device_id 做设备对比）
+    unawaited(DeviceIdentity.deviceId());
     // 进入主框架（登录后）启动 IM 长连接，跨页面复用单条连接
     ImWebSocket.instance.ensure();
     // 待办角标：进入主框架拉一次（账号切换后重置上个账号的旧值）
