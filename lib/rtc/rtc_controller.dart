@@ -14,6 +14,7 @@ import '../services/auth_manager.dart';
 import '../services/device_identity.dart';
 import '../services/im_websocket.dart';
 import '../services/rtc_api.dart';
+import '../services/rtc_call_marks.dart';
 import '../stores/conversation_store.dart';
 import '../shared/diag_log.dart';
 import '../shared/json_utils.dart';
@@ -44,6 +45,11 @@ class RtcSignalType {
 
   /// 参与者离房（LiveKit webhook participant_left 触发；NONE 帧）。
   static const int participantDisconnected = 1603;
+
+  /// 其他设备已接听（NONE 帧；accept 后端广播给同账号所有端）：
+  /// payload 带 acceptedUserId/acceptedDeviceId/acceptedDeviceType/room，
+  /// 各端对比 acceptedDeviceId 判断是否本设备接听，其他设备自动收尾来电页。
+  static const int otherDeviceAccepted = 1620;
 
   /// 通话开始消息（入会话消息流；仅聊天记录展示用）。
   static const int callStart = 1610;
@@ -314,6 +320,9 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
       case RtcSignalType.participantDisconnected:
         _handleParticipantDisconnected(n.payload);
         break;
+      case RtcSignalType.otherDeviceAccepted:
+        _handleOtherDeviceAccepted(n.payload);
+        break;
     }
   }
 
@@ -355,6 +364,43 @@ class RtcController extends ChangeNotifier with WidgetsBindingObserver {
       _stopRingback(); // 对方接听：停回铃音
       _enterRunning(autoConnect: true);
     }
+  }
+
+  /// 其他设备已接听（1620：accept 后端广播给同账号所有端）。
+  /// payload：acceptedUserId/acceptedDeviceId/acceptedDeviceType/room。
+  /// 本端来电页振铃中收到 → 对比 acceptedDeviceId：
+  /// 非本设备（或未知）→ 收尾来电页并提示「已在其他设备接听」。
+  void _handleOtherDeviceAccepted(Map<String, dynamic> payload) {
+    final room = asString(payload['room']);
+    final acceptedUserId = asInt(payload['acceptedUserId']);
+    final myUserId = AuthManager.instance.userId ?? 0;
+    // 防御：非本账号的接听广播（群通话场景其他用户接听）与本端无关
+    if (acceptedUserId > 0 && myUserId > 0 && acceptedUserId != myUserId) {
+      DiagLog.log('[RTC] 1620 非本账号接听广播，忽略: room=$room, '
+          'acceptedUserId=$acceptedUserId, me=$myUserId');
+      return;
+    }
+    if (_stage != RtcStage.incoming || incomingSignal?.room != room) {
+      DiagLog.log('[RTC] 1620 未匹配来电页（stage=$_stage, room=$room, '
+          '来电room=${incomingSignal?.room}）');
+      return;
+    }
+    final acceptedDeviceId = asString(payload['acceptedDeviceId']);
+    final myDeviceId = DeviceIdentity.cachedDeviceId;
+    // 本设备接听的广播回显：忽略（本端已进通话）
+    if (acceptedDeviceId.isNotEmpty &&
+        myDeviceId != null &&
+        acceptedDeviceId == myDeviceId) {
+      DiagLog.log('[RTC] 1620 本设备接听回显，忽略: room=$room');
+      return;
+    }
+    DiagLog.log('[RTC] 1620 其他设备已接听 → 收尾本端来电页: room=$room, '
+        '接听设备=$acceptedDeviceId(${payload['acceptedDeviceType']}), '
+        '本设备=$myDeviceId');
+    // 记录标记：通话结束后聊天室的 1611 消息在本端显示「已在其他设备接听」
+    // （服务端文案统一为「通话时长 xx:xx」，不知晓各端接听归属）
+    unawaited(RtcCallMarks.markOtherDeviceAccepted(room));
+    finishCall(localEnd: false, toast: '已在其他设备接听');
   }
 
   /// 参与者离房（LiveKit webhook participant_left 触发）：

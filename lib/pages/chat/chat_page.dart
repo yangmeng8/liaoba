@@ -35,6 +35,7 @@ import '../../services/chat_push_service.dart';
 import '../../services/im_api.dart';
 import '../../services/im_websocket.dart';
 import '../../services/desktop_notify_service.dart';
+import '../../services/rtc_call_marks.dart';
 import '../../shared/app_colors.dart';
 import '../../shared/app_theme.dart';
 import '../../shared/chat_background.dart';
@@ -2824,7 +2825,12 @@ class _MessageItem extends StatelessWidget {
             const SizedBox(width: 6),
             Flexible(
               child: Text(
-                rtc.privateBubbleText(AuthManager.instance.userId ?? 0),
+                // 本端被动收尾的通话（其他设备接听）：显示归属文案
+                // 而非服务端统一下发的「通话时长 xx:xx」
+                RtcCallMarks.isOtherDeviceAccepted(rtc.room)
+                    ? '已在其他设备接听'
+                    : rtc.privateBubbleText(
+                        AuthManager.instance.userId ?? 0),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 // 与普通文本气泡同口径：自己绿底黑字，对方跟主题正文色
